@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <QT_Root>C:\Quantower\TradingPlatform</QT_Root>
+
+    <QT_Dirs>$([System.IO.Directory]::GetDirectories("$(QT_Root)", "v*"))</QT_Dirs>
+
+    <QT_LastIndex>$([System.String]::new('$(QT_Dirs)').LastIndexOf(';'))</QT_LastIndex>
+    <QT_LatestPath Condition="'$(QT_LastIndex)' == '-1'">$(QT_Dirs)</QT_LatestPath>
+    <QT_LatestPath Condition="'$(QT_LastIndex)' != '-1'"
+      >$([System.String]::new('$(QT_Dirs)').Substring($([MSBuild]::Add($(QT_LastIndex), 1))))</QT_LatestPath
+    >
+  </PropertyGroup>
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <Platforms>AnyCPU</Platforms>
+    <AlgoType>Strategy</AlgoType>
+    <AssemblyName>OmniFlattener</AssemblyName>
+    <RootNamespace>OmniFlattener</RootNamespace>
+    <StartAction>Program</StartAction>
+    <StartProgram>$(QT_LatestPath)\Console.StarterNew.exe</StartProgram>
+    <StartArguments>--address 127.0.0.1 --port 52879</StartArguments>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="TradingPlatform.BusinessLayer">
+      <HintPath>$(QT_LatestPath)\bin\TradingPlatform.BusinessLayer.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+</Project>
