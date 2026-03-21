@@ -1,0 +1,10 @@
+﻿.vs/
+obj/
+bin/
+tmp/
+*.user
+*.suo
+*.cache
+_zzz_*
+_ZZZ_*
+settings.json

@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <QT_Root>C:\Quantower\TradingPlatform</QT_Root>
+
+    <QT_Dirs>$([System.IO.Directory]::GetDirectories("$(QT_Root)", "v*"))</QT_Dirs>
+
+    <QT_LastIndex>$([System.String]::new('$(QT_Dirs)').LastIndexOf(';'))</QT_LastIndex>
+    <QT_LatestPath Condition="'$(QT_LastIndex)' == '-1'">$(QT_Dirs)</QT_LatestPath>
+    <QT_LatestPath Condition="'$(QT_LastIndex)' != '-1'"
+      >$([System.String]::new('$(QT_Dirs)').Substring($([MSBuild]::Add($(QT_LastIndex), 1))))</QT_LatestPath
+    >
+  </PropertyGroup>
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.2" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="Moq" Version="4.20.72" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\OmniFlattenerStrategy\OmniFlattener.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="TradingPlatform.BusinessLayer">
+      <HintPath>$(QT_LatestPath)\bin\TradingPlatform.BusinessLayer.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+  </ItemGroup>
+</Project>
