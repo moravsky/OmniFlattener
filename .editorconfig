@@ -1,0 +1,4 @@
+root = true
+ 
+[*.cs]
+resharper_unused_type_global_highlighting             = none

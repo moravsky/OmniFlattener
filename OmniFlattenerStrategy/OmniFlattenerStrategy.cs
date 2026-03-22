@@ -10,7 +10,6 @@ namespace OmniFlattener
         private FlattenEngine? _engine;
 
         public OmniFlattenerStrategy()
-            : base()
         {
             Name        = "OmniFlattener";
             Description = "Cancels orders and closes positions on follower accounts when leader goes flat";

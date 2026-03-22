@@ -27,11 +27,6 @@ namespace OmniFlattener
             }
         }
 
-        protected override void OnCreated()
-        {
-            base.OnCreated();
-        }
-
         private void BuildSettings()
         {
             _additionalSettings.Clear();
@@ -47,7 +42,7 @@ namespace OmniFlattener
                 Core.Instance.Accounts.FirstOrDefault(a => a.Name == LeaderAccountName),
                 sortIndex: 10);
 
-            leaderSetting.PropertyChanged += (s, e) =>
+            leaderSetting.PropertyChanged += (_, e) =>
             {
                 if (e.PropertyName == nameof(SettingItem.Value))
                     LeaderAccountName = (leaderSetting.Value as Account)?.Name;
@@ -66,7 +61,7 @@ namespace OmniFlattener
                 bool enable = !_disabledFollowers.Contains(name);
 
                 var checkbox = new SettingItemBoolean(name, enable, sortIndex++);
-                checkbox.PropertyChanged += (s, e) =>
+                checkbox.PropertyChanged += (_, e) =>
                 {
                     if (e.PropertyName != nameof(SettingItem.Value) || checkbox.Value is not bool enabled)
                         return;
@@ -96,7 +91,7 @@ namespace OmniFlattener
                     If the leader resumes within this window the flatten is cancelled.
                     """,
             };
-            syncDelaySetting.PropertyChanged += (s, e) =>
+            syncDelaySetting.PropertyChanged += (_, e) =>
             {
                 if (e.PropertyName == nameof(SettingItem.Value) && syncDelaySetting.Value is int d)
                     SyncDelayMs = d;
@@ -109,7 +104,7 @@ namespace OmniFlattener
                 SeparatorGroup = timingGroup,
                 Description    = "Backstop refresh frequency. Catches anything missed by order/position events.",
             };
-            refreshIntervalSetting.PropertyChanged += (s, e) =>
+            refreshIntervalSetting.PropertyChanged += (_, e) =>
             {
                 if (e.PropertyName == nameof(SettingItem.Value) && refreshIntervalSetting.Value is int p)
                     RefreshIntervalMs = p;
@@ -127,13 +122,12 @@ namespace OmniFlattener
             {
                 SeparatorGroup = eodGroup,
             };
-            enabledSetting.PropertyChanged += (s, e) =>
+            enabledSetting.PropertyChanged += (_, e) =>
             {
                 if (e.PropertyName == nameof(SettingItem.Value) && enabledSetting.Value is bool enabled)
                     EodEnabled = enabled;
             };
 
-            // Session template selector — pre-fills FlattenAt from primary session close time
             var templateNames = Core.Instance.CustomSessions
                 .Select(c => c.Name)
                 .ToList();
@@ -156,14 +150,13 @@ namespace OmniFlattener
                 SeparatorGroup = eodGroup,
                 Description    = "Time of day (in your Quantower timezone) to flatten all accounts.",
             };
-            flattenAtSetting.PropertyChanged += (s, e) =>
+            flattenAtSetting.PropertyChanged += (_, e) =>
             {
                 if (e.PropertyName == nameof(SettingItem.Value) && flattenAtSetting.Value is DateTime dt)
                     EodFlattenAt = dt.TimeOfDay;
             };
 
-            // Template selection pre-fills FlattenAt then steps aside
-            templateSetting.PropertyChanged += (s, e) =>
+            templateSetting.PropertyChanged += (_, e) =>
             {
                 if (e.PropertyName != nameof(SettingItem.Value)) return;
 
