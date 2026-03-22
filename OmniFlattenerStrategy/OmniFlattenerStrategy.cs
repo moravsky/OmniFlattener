@@ -17,14 +17,7 @@ namespace OmniFlattener
 
         protected override void OnRun()
         {
-            if (string.IsNullOrWhiteSpace(LeaderAccountName))
-            {
-                this.LogError("Leader account is not set.");
-                Stop();
-                return;
-            }
-
-            this.LogInfo($"Leader:       {LeaderAccountName}");
+            this.LogInfo($"Leader:       {(string.IsNullOrWhiteSpace(LeaderAccountName) ? "(none — EOD protection only)" : LeaderAccountName)}");
             this.LogInfo($"Disabled:     {(_disabledFollowers.Count > 0 ? string.Join(", ", _disabledFollowers) : "(none)")}");
             this.LogInfo($"Sync delay:   {SyncDelayMs}ms | Refresh: {RefreshIntervalMs}ms");
             this.LogInfo($"EOD:          {(EodEnabled ? $"enabled, flatten at {EodFlattenAt:hh\\:mm}" : "disabled")}");
@@ -32,7 +25,7 @@ namespace OmniFlattener
             var ctx = new FlattenContext(
                 logger: new StrategyLogger(this),
                 settings: new FlattenSettings(
-                    leaderName:        LeaderAccountName,
+                    leaderName:        LeaderAccountName ?? string.Empty,
                     disabledFollowers: _disabledFollowers,
                     syncDelayMs:       SyncDelayMs,
                     refreshIntervalMs: RefreshIntervalMs,
