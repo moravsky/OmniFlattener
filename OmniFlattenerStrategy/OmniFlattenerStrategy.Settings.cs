@@ -128,13 +128,16 @@ namespace OmniFlattener
                     EodEnabled = enabled;
             };
 
+            const string preferredTemplate = "CME Indexes Full day";
             var templateNames = Core.Instance.CustomSessions
                 .Select(c => c.Name)
+                .OrderBy(n => n == preferredTemplate ? 0 : 1)
+                .ThenBy(n => n)
                 .ToList();
 
             var templateSetting = new SettingItemSelector(
                 "Session template",
-                templateNames.FirstOrDefault() ?? "",
+                templateNames.Contains(preferredTemplate) ? preferredTemplate : templateNames.FirstOrDefault() ?? "",
                 templateNames,
                 sortIndex: 40)
             {
@@ -148,7 +151,7 @@ namespace OmniFlattener
                 sortIndex: 50)
             {
                 SeparatorGroup = eodGroup,
-                Description    = "Time of day (in your Quantower timezone) to flatten all accounts.",
+                Description    = "Time of day (in machine local time) to flatten all accounts.",
             };
             flattenAtSetting.PropertyChanged += (_, e) =>
             {
@@ -158,8 +161,14 @@ namespace OmniFlattener
 
             templateSetting.PropertyChanged += (_, e) =>
             {
-                if (e.PropertyName != nameof(SettingItem.Value)) return;
+                if (e.PropertyName == nameof(SettingItem.Value)) ApplyTemplate();
+            };
 
+            // Apply immediately so Flatten At is in machine local time on first open
+            ApplyTemplate();
+
+            void ApplyTemplate()
+            {
                 var selectedName = templateSetting.Value as string;
                 if (string.IsNullOrEmpty(selectedName)) return;
 
@@ -174,9 +183,13 @@ namespace OmniFlattener
 
                 if (primarySession == null) return;
 
-                EodFlattenAt           = primarySession.CloseTime.Subtract(TimeSpan.FromMinutes(2));
+                // CloseTime is stored in UTC — convert directly to machine local.
+                var closeLocal = TimeZoneInfo.ConvertTimeFromUtc(
+                    DateTime.UtcNow.Date + primarySession.CloseTime,
+                    TimeZoneInfo.Local);
+                EodFlattenAt           = closeLocal.TimeOfDay - TimeSpan.FromMinutes(2);
                 flattenAtSetting.Value = DateTime.Today + EodFlattenAt;
-            };
+            }
 
             _additionalSettings.Add(enabledSetting);
             _additionalSettings.Add(templateSetting);
