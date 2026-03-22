@@ -5,14 +5,9 @@ using TradingPlatform.BusinessLayer;
 
 namespace OmniFlattener
 {
-    public class QuantowerAccountView : IAccountView
+    public class QuantowerAccountView(Account account) : IAccountView
     {
-        private readonly Account _account;
-
-        public QuantowerAccountView(Account account)
-        {
-            _account = account ?? throw new ArgumentNullException(nameof(account));
-        }
+        private readonly Account _account = account ?? throw new ArgumentNullException(nameof(account));
 
         public string AccountName => _account.Name;
 
@@ -56,7 +51,7 @@ namespace OmniFlattener
         public LiveFlattenService(Strategy strategy)
         {
             if (strategy == null) throw new ArgumentNullException(nameof(strategy));
-            _logError = msg => strategy.LogError(msg);
+            _logError = strategy.LogError;
         }
 
         public void CancelOrder(OrderSnapshot snapshot)
@@ -93,36 +88,23 @@ namespace OmniFlattener
         public StrategyLogger(Strategy strategy)
         {
             if (strategy == null) throw new ArgumentNullException(nameof(strategy));
-            _log = msg => strategy.LogInfo(msg);
+            _log = strategy.LogInfo;
         }
 
         public void Log(string message) => _log(message);
     }
 
-    public class FlattenSettings : IFlattenSettings
+    public class FlattenSettings(
+        string leaderName,
+        HashSet<string> disabledFollowers,
+        int syncDelayMs,
+        int refreshIntervalMs,
+        bool eodEnabled,
+        TimeSpan eodFlattenAt)
+        : IFlattenSettings
     {
-        private readonly string          _leaderName;
-        private readonly HashSet<string> _disabledFollowers;
-        private readonly int             _syncDelayMs;
-        private readonly int             _refreshIntervalMs;
-        private readonly bool            _eodEnabled;
-        private readonly TimeSpan        _eodFlattenAt;
-
-        public FlattenSettings(
-            string          leaderName,
-            HashSet<string> disabledFollowers,
-            int             syncDelayMs,
-            int             refreshIntervalMs,
-            bool            eodEnabled,
-            TimeSpan        eodFlattenAt)
-        {
-            _leaderName        = leaderName        ?? throw new ArgumentNullException(nameof(leaderName));
-            _disabledFollowers = disabledFollowers ?? throw new ArgumentNullException(nameof(disabledFollowers));
-            _syncDelayMs       = syncDelayMs;
-            _refreshIntervalMs = refreshIntervalMs;
-            _eodEnabled        = eodEnabled;
-            _eodFlattenAt      = eodFlattenAt;
-        }
+        private readonly string          _leaderName = leaderName        ?? throw new ArgumentNullException(nameof(leaderName));
+        private readonly HashSet<string> _disabledFollowers = disabledFollowers ?? throw new ArgumentNullException(nameof(disabledFollowers));
 
         public IAccountView? Leader
         {
@@ -141,27 +123,21 @@ namespace OmniFlattener
                 .Select(a => (IAccountView)new QuantowerAccountView(a))
                 .ToList();
 
-        public int      SyncDelayMs      => _syncDelayMs;
-        public int      RefreshIntervalMs => _refreshIntervalMs;
-        public bool     EodEnabled        => _eodEnabled;
-        public TimeSpan EodFlattenAt      => _eodFlattenAt;
+        public int      SyncDelayMs      => syncDelayMs;
+        public int      RefreshIntervalMs => refreshIntervalMs;
+        public bool     EodEnabled        => eodEnabled;
+        public TimeSpan EodFlattenAt      => eodFlattenAt;
 
         public DateTime Now =>
             Core.Instance.TimeUtils.ConvertFromUTCToSelectedTimeZone(
                 Core.Instance.TimeUtils.DateTimeUtcNow);
     }
 
-    public class FlattenContext : IFlattenContext
+    public class FlattenContext(IFlattenLogger logger, IFlattenSettings settings, IFlattenService flattenService)
+        : IFlattenContext
     {
-        public IFlattenLogger   Logger         { get; }
-        public IFlattenSettings Settings       { get; }
-        public IFlattenService  FlattenService { get; }
-
-        public FlattenContext(IFlattenLogger logger, IFlattenSettings settings, IFlattenService flattenService)
-        {
-            Logger         = logger         ?? throw new ArgumentNullException(nameof(logger));
-            Settings       = settings       ?? throw new ArgumentNullException(nameof(settings));
-            FlattenService = flattenService ?? throw new ArgumentNullException(nameof(flattenService));
-        }
+        public IFlattenLogger   Logger         { get; } = logger         ?? throw new ArgumentNullException(nameof(logger));
+        public IFlattenSettings Settings       { get; } = settings       ?? throw new ArgumentNullException(nameof(settings));
+        public IFlattenService  FlattenService { get; } = flattenService ?? throw new ArgumentNullException(nameof(flattenService));
     }
 }
