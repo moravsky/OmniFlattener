@@ -95,7 +95,7 @@ namespace OmniFlattener
     }
 
     public class FlattenSettings(
-        string leaderName,
+        string? leaderName,
         HashSet<string> disabledFollowers,
         int syncDelayMs,
         int refreshIntervalMs,
@@ -103,7 +103,7 @@ namespace OmniFlattener
         TimeSpan eodFlattenAt)
         : IFlattenSettings
     {
-        private readonly string          _leaderName = leaderName        ?? throw new ArgumentNullException(nameof(leaderName));
+        private readonly string          _leaderName = leaderName ?? ""; // empty = no leader, Leader property returns null
         private readonly HashSet<string> _disabledFollowers = disabledFollowers ?? throw new ArgumentNullException(nameof(disabledFollowers));
 
         public IAccountView? Leader
