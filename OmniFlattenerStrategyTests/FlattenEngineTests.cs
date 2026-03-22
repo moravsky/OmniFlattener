@@ -8,18 +8,29 @@ namespace OmniFlattener.Tests
         private class StubAccount : IAccountView
         {
             public string AccountName { get; init; } = "stub";
-            public List<OrderSnapshot> Orders    { get; } = new();
+            public List<OrderSnapshot> Orders { get; } = new();
             public List<PositionSnapshot> Positions { get; } = new();
-            public List<OrderSnapshot> GetOpenOrders()       => Orders;
+            public List<OrderSnapshot> GetOpenOrders() => Orders;
             public List<PositionSnapshot> GetOpenPositions() => Positions;
         }
 
-        private class SpyFlattenService : IFlattenService
+        private class SpyFlattenService(params StubAccount[] accounts) : IFlattenService
         {
-            public List<OrderSnapshot> CancelledOrders    { get; } = new();
+            private readonly List<StubAccount> _accounts = accounts.ToList();
+            public List<OrderSnapshot> CancelledOrders { get; } = new();
             public List<PositionSnapshot> ClosedPositions { get; } = new();
-            public void CancelOrder(OrderSnapshot o)              => CancelledOrders.Add(o);
-            public void ClosePositionAtMarket(PositionSnapshot p) => ClosedPositions.Add(p);
+
+            public void CancelOrder(OrderSnapshot o)
+            {
+                CancelledOrders.Add(o);
+                _accounts.FirstOrDefault(a => a.AccountName == o.AccountName)?.Orders.RemoveAll(x => x.Id == o.Id);
+            }
+
+            public void ClosePositionAtMarket(PositionSnapshot p)
+            {
+                ClosedPositions.Add(p);
+                _accounts.FirstOrDefault(a => a.AccountName == p.AccountName)?.Positions.Clear();
+            }
         }
 
         private class StubLogger(Action<string>? log = null) : IFlattenLogger
@@ -29,25 +40,25 @@ namespace OmniFlattener.Tests
 
         private class StubSettings : IFlattenSettings
         {
-            public IAccountView?               Leader          { get; set; }
-            public List<IAccountView>          AllAccountList  { get; init; } = new();
-            public IReadOnlyList<IAccountView> AllAccounts     => AllAccountList;
-            public int                         SyncDelayMs     { get; init; }
-            public int                         RefreshIntervalMs { get; init; }
-            public bool                        EodEnabled      { get; set; }
-            public TimeSpan                    EodFlattenAt    { get; set; } = new TimeSpan(16, 59, 0);
+            public IAccountView? Leader { get; set; }
+            public List<IAccountView> AllAccountList { get; init; } = new();
+            public IReadOnlyList<IAccountView> AllAccounts => AllAccountList;
+            public int SyncDelayMs { get; init; }
+            public int RefreshIntervalMs { get; init; }
+            public bool EodEnabled { get; set; }
+            public TimeSpan EodFlattenAt { get; set; } = new TimeSpan(16, 59, 0);
 
             // Mutable clock — tests advance this to simulate time passing.
             // Defaults to far in the past so EOD never fires unless explicitly set.
-            public DateTime                    Now             { get; set; } = new DateTime(2000, 1, 1, 0, 0, 0);
+            public DateTime Now { get; set; } = new DateTime(2000, 1, 1, 0, 0, 0);
         }
 
         private class StubContext(IFlattenLogger logger, IFlattenSettings settings, IFlattenService flattenService)
             : IFlattenContext
         {
-            public IFlattenLogger   Logger         { get; } = logger;
-            public IFlattenSettings Settings       { get; } = settings;
-            public IFlattenService  FlattenService { get; } = flattenService;
+            public IFlattenLogger Logger { get; } = logger;
+            public IFlattenSettings Settings { get; } = settings;
+            public IFlattenService FlattenService { get; } = flattenService;
         }
 
         #endregion
@@ -60,22 +71,23 @@ namespace OmniFlattener.Tests
         private static PositionSnapshot MakePosition(string account = "follower", double qty = 1) =>
             new() { AccountName = account, Symbol = "MNQ", Quantity = qty, Side = qty > 0 ? "Sell" : "Buy" };
 
-        private static StubAccount MakeLeader()                           => new() { AccountName = "leader" };
+        private static StubAccount MakeLeader() => new() { AccountName = "leader" };
         private static StubAccount MakeFollower(string name = "follower") => new() { AccountName = name };
 
-        private static (FlattenEngine engine, StubSettings settings, SpyFlattenService spy, StubAccount leader, StubAccount follower)
+        private static (FlattenEngine engine, StubSettings settings, SpyFlattenService spy, StubAccount leader,
+            StubAccount follower)
             Make(int syncDelayMs = 0, Action<string>? log = null)
         {
-            var leader   = MakeLeader();
+            var leader = MakeLeader();
             var follower = MakeFollower();
-            var spy      = new SpyFlattenService();
+            var spy = new SpyFlattenService(leader, follower);
             var settings = new StubSettings
             {
-                Leader         = leader,
+                Leader = leader,
                 AllAccountList = [leader, follower],
-                SyncDelayMs    = syncDelayMs,
+                SyncDelayMs = syncDelayMs,
             };
-            var ctx    = new StubContext(new StubLogger(log), settings, spy);
+            var ctx = new StubContext(new StubLogger(log), settings, spy);
             var engine = new FlattenEngine(ctx);
             return (engine, settings, spy, leader, follower);
         }
@@ -139,12 +151,12 @@ namespace OmniFlattener.Tests
         [Fact]
         public void Multiple_followers_all_flattened()
         {
-            var f1  = MakeFollower("f1");
-            var f2  = MakeFollower("f2");
+            var f1 = MakeFollower("f1");
+            var f2 = MakeFollower("f2");
             var spy = new SpyFlattenService();
             var settings = new StubSettings
             {
-                Leader         = MakeLeader(),
+                Leader = MakeLeader(),
                 AllAccountList = [f1, f2],
             };
             var engine = new FlattenEngine(new StubContext(new StubLogger(), settings, spy));
@@ -155,6 +167,23 @@ namespace OmniFlattener.Tests
             engine.Check("test");
 
             Assert.Single(spy.CancelledOrders);
+            Assert.Single(spy.ClosedPositions);
+        }
+
+        [Fact]
+        public void New_follower_position_while_leader_stays_flat_gets_flattened()
+        {
+            var (engine, _, spy, _, follower) = Make();
+            follower.Orders.Add(MakeOrder("O1"));
+
+            engine.Check("refresh-1");
+            Assert.Single(spy.CancelledOrders);
+            follower.Orders.Clear();
+
+            // Leader still flat — follower opens a new position, PositionAdded event fires
+            follower.Positions.Add(MakePosition());
+            engine.Check("position-event");
+
             Assert.Single(spy.ClosedPositions);
         }
 
@@ -313,12 +342,12 @@ namespace OmniFlattener.Tests
         [Fact]
         public void Disabled_follower_never_gets_flattened_even_after_reconnect()
         {
-            var f1  = MakeFollower("f1");
-            var f2  = MakeFollower("f2");
+            var f1 = MakeFollower("f1");
+            var f2 = MakeFollower("f2");
             var spy = new SpyFlattenService();
             var settings = new StubSettings
             {
-                Leader         = MakeLeader(),
+                Leader = MakeLeader(),
                 AllAccountList = [f1, f2],
             };
             var engine = new FlattenEngine(new StubContext(new StubLogger(), settings, spy));
@@ -358,15 +387,15 @@ namespace OmniFlattener.Tests
         public void Eod_fires_when_now_reaches_flatten_at()
         {
             var (_, settings, spy, leader, follower) = Make();
-            settings.EodEnabled  = true;
+            settings.EodEnabled = true;
             settings.EodFlattenAt = new TimeSpan(16, 59, 0);
-            settings.Now          = At(16, 59);
+            settings.Now = At(16, 59);
 
             leader.Positions.Add(MakePosition("leader")); // leader not flat — no leader-flat flatten
             follower.Orders.Add(MakeOrder("O1"));
 
             // Rebuild engine so _nextEodFlattenAt is computed from the new Now
-            var ctx    = new StubContext(new StubLogger(), settings, spy);
+            var ctx = new StubContext(new StubLogger(), settings, spy);
             var engine2 = new FlattenEngine(ctx);
 
             engine2.Check("test");
@@ -380,9 +409,9 @@ namespace OmniFlattener.Tests
         public void Eod_does_not_fire_before_flatten_at()
         {
             var (_, settings, spy, leader, follower) = Make();
-            settings.EodEnabled   = true;
+            settings.EodEnabled = true;
             settings.EodFlattenAt = new TimeSpan(16, 59, 0);
-            settings.Now          = At(16, 58);
+            settings.Now = At(16, 58);
             follower.Orders.Add(MakeOrder("O1"));
 
             // Leader not flat either — nothing should fire
@@ -398,9 +427,9 @@ namespace OmniFlattener.Tests
         public void Eod_disabled_does_not_fire()
         {
             var (_, settings, spy, leader, follower) = Make();
-            settings.EodEnabled   = false;
+            settings.EodEnabled = false;
             settings.EodFlattenAt = new TimeSpan(16, 59, 0);
-            settings.Now          = At(17, 30);
+            settings.Now = At(17, 30);
 
             leader.Positions.Add(MakePosition("leader"));
             follower.Orders.Add(MakeOrder("O1"));
@@ -414,16 +443,16 @@ namespace OmniFlattener.Tests
         [Fact]
         public void Eod_fires_all_accounts_including_leader()
         {
-            var leader   = MakeLeader();
+            var leader = MakeLeader();
             var follower = MakeFollower();
-            var spy      = new SpyFlattenService();
+            var spy = new SpyFlattenService();
             var settings = new StubSettings
             {
-                Leader         = leader,
+                Leader = leader,
                 AllAccountList = [leader, follower],
-                EodEnabled     = true,
-                EodFlattenAt   = new TimeSpan(16, 59, 0),
-                Now            = At(16, 59),
+                EodEnabled = true,
+                EodFlattenAt = new TimeSpan(16, 59, 0),
+                Now = At(16, 59),
             };
 
             // Leader has a position, follower has an order.
@@ -443,16 +472,16 @@ namespace OmniFlattener.Tests
         [Fact]
         public void Eod_fires_only_once_then_schedules_next_day()
         {
-            var leader   = MakeLeader();
+            var leader = MakeLeader();
             var follower = MakeFollower();
-            var spy      = new SpyFlattenService();
+            var spy = new SpyFlattenService();
             var settings = new StubSettings
             {
-                Leader         = leader,
+                Leader = leader,
                 AllAccountList = [leader, follower],
-                EodEnabled     = true,
-                EodFlattenAt   = new TimeSpan(16, 59, 0),
-                Now            = At(16, 59, day: 1),
+                EodEnabled = true,
+                EodFlattenAt = new TimeSpan(16, 59, 0),
+                Now = At(16, 59, day: 1),
             };
 
             // Leader not flat — prevents leader-flat flatten from interfering
@@ -479,16 +508,16 @@ namespace OmniFlattener.Tests
         [Fact]
         public void Eod_strategy_recreated_after_deadline_schedules_tomorrow()
         {
-            var leader   = MakeLeader();
+            var leader = MakeLeader();
             var follower = MakeFollower();
-            var spy      = new SpyFlattenService();
+            var spy = new SpyFlattenService();
             var settings = new StubSettings
             {
-                Leader         = leader,
+                Leader = leader,
                 AllAccountList = [leader, follower],
-                EodEnabled     = true,
-                EodFlattenAt   = new TimeSpan(16, 59, 0),
-                Now            = At(17, 30, day: 1), // started after today's deadline
+                EodEnabled = true,
+                EodFlattenAt = new TimeSpan(16, 59, 0),
+                Now = At(17, 30, day: 1), // started after today's deadline
             };
 
             leader.Positions.Add(MakePosition("leader"));
@@ -507,13 +536,13 @@ namespace OmniFlattener.Tests
         [Fact]
         public void Refresh_timer_fires_and_triggers_flatten()
         {
-            var leader   = MakeLeader();
+            var leader = MakeLeader();
             var follower = MakeFollower();
-            var spy      = new SpyFlattenService();
+            var spy = new SpyFlattenService(leader, follower);
             var settings = new StubSettings
             {
-                Leader            = leader,
-                AllAccountList    = [leader, follower],
+                Leader = leader,
+                AllAccountList = [leader, follower],
                 RefreshIntervalMs = 200,
             };
             var engine = new FlattenEngine(new StubContext(new StubLogger(), settings, spy));
@@ -530,13 +559,13 @@ namespace OmniFlattener.Tests
         [Fact]
         public void Refresh_timer_stops_after_dispose()
         {
-            var leader   = MakeLeader();
+            var leader = MakeLeader();
             var follower = MakeFollower();
-            var spy      = new SpyFlattenService();
+            var spy = new SpyFlattenService();
             var settings = new StubSettings
             {
-                Leader            = leader,
-                AllAccountList    = [leader, follower],
+                Leader = leader,
+                AllAccountList = [leader, follower],
                 RefreshIntervalMs = 200,
             };
             var engine = new FlattenEngine(new StubContext(new StubLogger(), settings, spy));
