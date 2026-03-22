@@ -37,13 +37,16 @@ namespace OmniFlattener.Tests
         private class StubSettings : IFlattenSettings
         {
             public IAccountView?               Leader          { get; set; }
-            public List<IAccountView>          FollowerList    { get; set; } = new();
-            public IReadOnlyList<IAccountView> Followers       => FollowerList;
+            public List<IAccountView>          AllAccountList  { get; set; } = new();
+            public IReadOnlyList<IAccountView> AllAccounts     => AllAccountList;
             public int                         SyncDelayMs     { get; set; }
-
-            // 0 suppresses the refresh timer — tests drive the engine directly
-            // via CheckLeaderIsFlat() and don't need background polling.
             public int                         RefreshIntervalMs { get; set; } = 0;
+            public bool                        EodEnabled      { get; set; } = false;
+            public TimeSpan                    EodFlattenAt    { get; set; } = new TimeSpan(16, 59, 0);
+
+            // Mutable clock — tests advance this to simulate time passing.
+            // Defaults to far in the past so EOD never fires unless explicitly set.
+            public DateTime                    Now             { get; set; } = new DateTime(2000, 1, 1, 0, 0, 0);
         }
 
         private class StubContext : IFlattenContext
@@ -73,7 +76,7 @@ namespace OmniFlattener.Tests
         private static StubAccount MakeLeader()                           => new() { AccountName = "leader" };
         private static StubAccount MakeFollower(string name = "follower") => new() { AccountName = name };
 
-        private static (FlattenEngine engine, StubSettings settings, SpyFlattenService spy)
+        private static (FlattenEngine engine, StubSettings settings, SpyFlattenService spy, StubAccount leader, StubAccount follower)
             Make(int syncDelayMs = 0, Action<string>? log = null)
         {
             var leader   = MakeLeader();
@@ -81,14 +84,17 @@ namespace OmniFlattener.Tests
             var spy      = new SpyFlattenService();
             var settings = new StubSettings
             {
-                Leader       = leader,
-                FollowerList = new List<IAccountView> { follower },
-                SyncDelayMs  = syncDelayMs,
+                Leader         = leader,
+                AllAccountList = new List<IAccountView> { leader, follower },
+                SyncDelayMs    = syncDelayMs,
             };
             var ctx    = new StubContext(new StubLogger(log), settings, spy);
             var engine = new FlattenEngine(ctx);
-            return (engine, settings, spy);
+            return (engine, settings, spy, leader, follower);
         }
+
+        private static DateTime At(int hour, int minute, int day = 1) =>
+            new DateTime(2026, 3, day, hour, minute, 0);
 
         #endregion
 
@@ -97,12 +103,11 @@ namespace OmniFlattener.Tests
         [Fact]
         public void Leader_flat_cancels_orders_and_closes_positions()
         {
-            var (engine, settings, spy) = Make();
-            var follower = (StubAccount)settings.FollowerList[0];
+            var (engine, settings, spy, leader, follower) = Make();
             follower.Orders.Add(MakeOrder("O1"));
             follower.Positions.Add(MakePosition());
 
-            engine.CheckLeaderIsFlat("test");
+            engine.Check("test");
 
             Assert.Single(spy.CancelledOrders);
             Assert.Single(spy.ClosedPositions);
@@ -111,13 +116,11 @@ namespace OmniFlattener.Tests
         [Fact]
         public void Leader_has_position_no_action()
         {
-            var (engine, settings, spy) = Make();
-            var leader   = (StubAccount)settings.Leader!;
-            var follower = (StubAccount)settings.FollowerList[0];
+            var (engine, settings, spy, leader, follower) = Make();
             leader.Positions.Add(MakePosition("leader"));
             follower.Orders.Add(MakeOrder("O1"));
 
-            engine.CheckLeaderIsFlat("test");
+            engine.Check("test");
 
             Assert.Empty(spy.CancelledOrders);
         }
@@ -125,13 +128,11 @@ namespace OmniFlattener.Tests
         [Fact]
         public void Leader_has_open_order_no_action()
         {
-            var (engine, settings, spy) = Make();
-            var leader   = (StubAccount)settings.Leader!;
-            var follower = (StubAccount)settings.FollowerList[0];
+            var (engine, settings, spy, leader, follower) = Make();
             leader.Orders.Add(MakeOrder("L1", "leader"));
             follower.Positions.Add(MakePosition());
 
-            engine.CheckLeaderIsFlat("test");
+            engine.Check("test");
 
             Assert.Empty(spy.ClosedPositions);
         }
@@ -139,11 +140,10 @@ namespace OmniFlattener.Tests
         [Fact]
         public void Short_position_on_follower_is_closed()
         {
-            var (engine, settings, spy) = Make();
-            var follower = (StubAccount)settings.FollowerList[0];
+            var (engine, settings, spy, leader, follower) = Make();
             follower.Positions.Add(MakePosition("follower", -2));
 
-            engine.CheckLeaderIsFlat("test");
+            engine.Check("test");
 
             Assert.Single(spy.ClosedPositions);
             Assert.Equal(-2, spy.ClosedPositions[0].Quantity);
@@ -157,15 +157,15 @@ namespace OmniFlattener.Tests
             var spy = new SpyFlattenService();
             var settings = new StubSettings
             {
-                Leader       = MakeLeader(),
-                FollowerList = new List<IAccountView> { f1, f2 },
+                Leader         = MakeLeader(),
+                AllAccountList = new List<IAccountView> { f1, f2 },
             };
             var engine = new FlattenEngine(new StubContext(new StubLogger(), settings, spy));
 
             f1.Orders.Add(MakeOrder("A", "f1"));
             f2.Positions.Add(MakePosition("f2"));
 
-            engine.CheckLeaderIsFlat("test");
+            engine.Check("test");
 
             Assert.Single(spy.CancelledOrders);
             Assert.Single(spy.ClosedPositions);
@@ -179,33 +179,30 @@ namespace OmniFlattener.Tests
         public void Repeated_checks_while_flat_with_nothing_to_do_do_not_spam_log()
         {
             var logs = new List<string>();
-            var (engine, _, _) = Make(log: msg => logs.Add(msg));
+            var (engine, _, _, _, _) = Make(log: msg => logs.Add(msg));
 
             for (int i = 0; i < 5; i++)
-                engine.CheckLeaderIsFlat("refresh");
+                engine.Check("refresh");
 
-            Assert.Equal(1, logs.Count(l => l.Contains("No follower")));
+            Assert.Equal(1, logs.Count(l => l.Contains("Nothing to flatten")));
         }
 
         [Fact]
         public void Leader_resumes_then_goes_flat_again_triggers_new_flatten()
         {
-            var (engine, settings, spy) = Make();
-            var leader   = (StubAccount)settings.Leader!;
-            var follower = (StubAccount)settings.FollowerList[0];
+            var (engine, settings, spy, leader, follower) = Make();
             follower.Orders.Add(MakeOrder("O1"));
 
-            engine.CheckLeaderIsFlat("refresh-1");
+            engine.Check("refresh-1");
             Assert.Single(spy.CancelledOrders);
 
             follower.Orders.Clear();
-
             leader.Positions.Add(MakePosition("leader"));
-            engine.CheckLeaderIsFlat("position-event");
+            engine.Check("position-event");
 
             leader.Positions.Clear();
             follower.Orders.Add(MakeOrder("O2"));
-            engine.CheckLeaderIsFlat("refresh-2");
+            engine.Check("refresh-2");
 
             Assert.Equal(2, spy.CancelledOrders.Count);
         }
@@ -217,12 +214,11 @@ namespace OmniFlattener.Tests
         [Fact]
         public void Ghost_order_present_at_sync_delay_end_is_caught()
         {
-            var (engine, settings, spy) = Make();
-            var follower = (StubAccount)settings.FollowerList[0];
+            var (engine, settings, spy, leader, follower) = Make();
             follower.Orders.Add(MakeOrder("O1"));
             follower.Orders.Add(MakeOrder("O2-ghost"));
 
-            engine.CheckLeaderIsFlat("refresh");
+            engine.Check("refresh");
 
             Assert.Equal(2, spy.CancelledOrders.Count);
         }
@@ -230,15 +226,13 @@ namespace OmniFlattener.Tests
         [Fact]
         public void Leader_resumes_before_sync_delay_elapses_no_flatten()
         {
-            var (engine, settings, spy) = Make(syncDelayMs: 1000);
-            var leader   = (StubAccount)settings.Leader!;
-            var follower = (StubAccount)settings.FollowerList[0];
+            var (engine, settings, spy, leader, follower) = Make(syncDelayMs: 1000);
             follower.Orders.Add(MakeOrder("O1"));
 
-            engine.CheckLeaderIsFlat("event");
+            engine.Check("event");
 
             leader.Positions.Add(MakePosition("leader"));
-            engine.CheckLeaderIsFlat("position-event");
+            engine.Check("position-event");
 
             Thread.Sleep(1500);
 
@@ -248,11 +242,10 @@ namespace OmniFlattener.Tests
         [Fact]
         public void Leader_stays_flat_through_sync_delay_triggers_flatten()
         {
-            var (engine, settings, spy) = Make(syncDelayMs: 1000);
-            var follower = (StubAccount)settings.FollowerList[0];
+            var (engine, settings, spy, leader, follower) = Make(syncDelayMs: 1000);
             follower.Orders.Add(MakeOrder("O1"));
 
-            engine.CheckLeaderIsFlat("event");
+            engine.Check("event");
 
             Thread.Sleep(1500);
 
@@ -266,13 +259,11 @@ namespace OmniFlattener.Tests
         [Fact]
         public void Leader_disconnected_does_not_trigger_flatten()
         {
-            var (engine, settings, spy) = Make();
-            var follower = (StubAccount)settings.FollowerList[0];
+            var (engine, settings, spy, leader, follower) = Make();
             follower.Orders.Add(MakeOrder("O1"));
 
             settings.Leader = null;
-
-            engine.CheckLeaderIsFlat("refresh");
+            engine.Check("refresh");
 
             Assert.Empty(spy.CancelledOrders);
         }
@@ -280,16 +271,15 @@ namespace OmniFlattener.Tests
         [Fact]
         public void Leader_reconnects_with_new_object_and_resumes_working()
         {
-            var (engine, settings, spy) = Make();
-            var follower = (StubAccount)settings.FollowerList[0];
+            var (engine, settings, spy, leader, follower) = Make();
             follower.Orders.Add(MakeOrder("O1"));
 
             settings.Leader = null;
-            engine.CheckLeaderIsFlat("refresh");
+            engine.Check("refresh");
             Assert.Empty(spy.CancelledOrders);
 
             settings.Leader = MakeLeader();
-            engine.CheckLeaderIsFlat("refresh");
+            engine.Check("refresh");
 
             Assert.Single(spy.CancelledOrders);
         }
@@ -297,13 +287,13 @@ namespace OmniFlattener.Tests
         [Fact]
         public void New_follower_account_added_mid_session_gets_flattened()
         {
-            var (engine, settings, spy) = Make();
+            var (engine, settings, spy, leader, follower) = Make();
 
             var newEval = MakeFollower("new-eval");
             newEval.Orders.Add(MakeOrder("O1", "new-eval"));
-            settings.FollowerList.Add(newEval);
+            settings.AllAccountList.Add(newEval);
 
-            engine.CheckLeaderIsFlat("refresh");
+            engine.Check("refresh");
 
             Assert.Single(spy.CancelledOrders);
             Assert.Equal("new-eval", spy.CancelledOrders[0].AccountName);
@@ -312,26 +302,23 @@ namespace OmniFlattener.Tests
         [Fact]
         public void Busted_follower_reconnects_and_is_still_flattened()
         {
-            var (engine, settings, spy) = Make();
-            var follower = (StubAccount)settings.FollowerList[0];
+            var (engine, settings, spy, leader, follower) = Make();
             follower.Orders.Add(MakeOrder("O1"));
 
-            engine.CheckLeaderIsFlat("refresh-1");
+            engine.Check("refresh-1");
             Assert.Single(spy.CancelledOrders);
             follower.Orders.Clear();
 
-            settings.FollowerList.Clear();
+            settings.AllAccountList.Clear();
 
             var reconnected = MakeFollower("follower");
             reconnected.Orders.Add(MakeOrder("O2"));
-            settings.FollowerList.Add(reconnected);
-
-            var leader = (StubAccount)settings.Leader!;
+            settings.AllAccountList.Add(reconnected);
             leader.Positions.Add(MakePosition("leader"));
-            engine.CheckLeaderIsFlat("position-event");
+            engine.Check("position-event");
             leader.Positions.Clear();
 
-            engine.CheckLeaderIsFlat("refresh-2");
+            engine.Check("refresh-2");
 
             Assert.Equal(2, spy.CancelledOrders.Count);
         }
@@ -344,17 +331,17 @@ namespace OmniFlattener.Tests
             var spy = new SpyFlattenService();
             var settings = new StubSettings
             {
-                Leader       = MakeLeader(),
-                FollowerList = new List<IAccountView> { f1, f2 },
+                Leader         = MakeLeader(),
+                AllAccountList = new List<IAccountView> { f1, f2 },
             };
             var engine = new FlattenEngine(new StubContext(new StubLogger(), settings, spy));
 
             f1.Orders.Add(MakeOrder("A", "f1"));
             f2.Orders.Add(MakeOrder("B", "f2"));
 
-            settings.FollowerList.Remove(f2);
+            settings.AllAccountList.Remove(f2);
 
-            engine.CheckLeaderIsFlat("test");
+            engine.Check("test");
 
             Assert.Single(spy.CancelledOrders);
             Assert.Equal("f1", spy.CancelledOrders[0].AccountName);
@@ -363,16 +350,165 @@ namespace OmniFlattener.Tests
         [Fact]
         public void Leader_disconnected_during_sync_delay_aborts_flatten()
         {
-            var (engine, settings, spy) = Make(syncDelayMs: 1000);
-            var follower = (StubAccount)settings.FollowerList[0];
+            var (engine, settings, spy, leader, follower) = Make(syncDelayMs: 1000);
             follower.Orders.Add(MakeOrder("O1"));
 
-            engine.CheckLeaderIsFlat("event");
+            engine.Check("event");
 
             settings.Leader = null;
-            engine.CheckLeaderIsFlat("refresh");
+            engine.Check("refresh");
 
             Thread.Sleep(1500);
+
+            Assert.Empty(spy.CancelledOrders);
+        }
+
+        #endregion
+
+        #region EOD
+
+        [Fact]
+        public void Eod_fires_when_now_reaches_flatten_at()
+        {
+            var (engine, settings, spy, leader, follower) = Make();
+            settings.EodEnabled  = true;
+            settings.EodFlattenAt = new TimeSpan(16, 59, 0);
+            settings.Now          = At(16, 59);
+
+            leader.Positions.Add(MakePosition("leader")); // leader not flat — no leader-flat flatten
+            follower.Orders.Add(MakeOrder("O1"));
+
+            // Rebuild engine so _nextEodFlattenAt is computed from the new Now
+            var ctx    = new StubContext(new StubLogger(), settings, spy);
+            var engine2 = new FlattenEngine(ctx);
+
+            engine2.Check("test");
+
+            // EOD flattens AllAccounts — but AllAccountList is leader+follower
+            // follower has an order → it gets cancelled
+            Assert.Single(spy.CancelledOrders);
+        }
+
+        [Fact]
+        public void Eod_does_not_fire_before_flatten_at()
+        {
+            var (_, settings, spy, leader, follower) = Make();
+            settings.EodEnabled   = true;
+            settings.EodFlattenAt = new TimeSpan(16, 59, 0);
+            settings.Now          = At(16, 58);
+            follower.Orders.Add(MakeOrder("O1"));
+
+            // Leader not flat either — nothing should fire
+            leader.Positions.Add(MakePosition("leader"));
+
+            var engine = new FlattenEngine(new StubContext(new StubLogger(), settings, spy));
+            engine.Check("test");
+
+            Assert.Empty(spy.CancelledOrders);
+        }
+
+        [Fact]
+        public void Eod_disabled_does_not_fire()
+        {
+            var (_, settings, spy, leader, follower) = Make();
+            settings.EodEnabled   = false;
+            settings.EodFlattenAt = new TimeSpan(16, 59, 0);
+            settings.Now          = At(17, 30);
+
+            leader.Positions.Add(MakePosition("leader"));
+            follower.Orders.Add(MakeOrder("O1"));
+
+            var engine = new FlattenEngine(new StubContext(new StubLogger(), settings, spy));
+            engine.Check("test");
+
+            Assert.Empty(spy.CancelledOrders);
+        }
+
+        [Fact]
+        public void Eod_fires_all_accounts_including_leader()
+        {
+            var leader   = MakeLeader();
+            var follower = MakeFollower();
+            var spy      = new SpyFlattenService();
+            var settings = new StubSettings
+            {
+                Leader         = leader,
+                AllAccountList = new List<IAccountView> { leader, follower },
+                EodEnabled     = true,
+                EodFlattenAt   = new TimeSpan(16, 59, 0),
+                Now            = At(16, 59),
+            };
+
+            // Leader has a position, follower has an order.
+            // EOD must flatten both via AllAccounts — if it only used Followers,
+            // the leader position would survive.
+            leader.Positions.Add(MakePosition("leader"));
+            follower.Orders.Add(MakeOrder("O1", "follower"));
+
+            var engine = new FlattenEngine(new StubContext(new StubLogger(), settings, spy));
+            engine.Check("test");
+
+            Assert.Single(spy.CancelledOrders);
+            Assert.Single(spy.ClosedPositions);
+            Assert.Equal("leader", spy.ClosedPositions[0].AccountName);
+        }
+
+        [Fact]
+        public void Eod_fires_only_once_then_schedules_next_day()
+        {
+            var leader   = MakeLeader();
+            var follower = MakeFollower();
+            var spy      = new SpyFlattenService();
+            var settings = new StubSettings
+            {
+                Leader         = leader,
+                AllAccountList = new List<IAccountView> { leader, follower },
+                EodEnabled     = true,
+                EodFlattenAt   = new TimeSpan(16, 59, 0),
+                Now            = At(16, 59, day: 1),
+            };
+
+            // Leader not flat — prevents leader-flat flatten from interfering
+            leader.Positions.Add(MakePosition("leader"));
+            follower.Orders.Add(MakeOrder("O1"));
+
+            var engine = new FlattenEngine(new StubContext(new StubLogger(), settings, spy));
+
+            engine.Check("test"); // fires — day 1 at 16:59
+            Assert.Single(spy.CancelledOrders);
+            follower.Orders.Clear(); // simulate broker processed the cancellation
+
+            follower.Orders.Add(MakeOrder("O2"));
+            engine.Check("test"); // same day — should not fire again
+            Assert.Single(spy.CancelledOrders);
+
+            // Advance to next day
+            settings.Now = At(16, 59, day: 2);
+            follower.Orders.Add(MakeOrder("O3"));
+            engine.Check("test"); // next day — fires again
+            Assert.Equal(3, spy.CancelledOrders.Count);
+        }
+
+        [Fact]
+        public void Eod_strategy_recreated_after_deadline_schedules_tomorrow()
+        {
+            var leader   = MakeLeader();
+            var follower = MakeFollower();
+            var spy      = new SpyFlattenService();
+            var settings = new StubSettings
+            {
+                Leader         = leader,
+                AllAccountList = new List<IAccountView> { leader, follower },
+                EodEnabled     = true,
+                EodFlattenAt   = new TimeSpan(16, 59, 0),
+                Now            = At(17, 30, day: 1), // started after today's deadline
+            };
+
+            leader.Positions.Add(MakePosition("leader"));
+            follower.Orders.Add(MakeOrder("O1"));
+
+            var engine = new FlattenEngine(new StubContext(new StubLogger(), settings, spy));
+            engine.Check("test"); // should NOT fire — past today, scheduled for tomorrow
 
             Assert.Empty(spy.CancelledOrders);
         }
@@ -390,7 +526,7 @@ namespace OmniFlattener.Tests
             var settings = new StubSettings
             {
                 Leader            = leader,
-                FollowerList      = new List<IAccountView> { follower },
+                AllAccountList    = new List<IAccountView> { leader, follower },
                 RefreshIntervalMs = 200,
             };
             var engine = new FlattenEngine(new StubContext(new StubLogger(), settings, spy));
@@ -413,7 +549,7 @@ namespace OmniFlattener.Tests
             var settings = new StubSettings
             {
                 Leader            = leader,
-                FollowerList      = new List<IAccountView> { follower },
+                AllAccountList    = new List<IAccountView> { leader, follower },
                 RefreshIntervalMs = 200,
             };
             var engine = new FlattenEngine(new StubContext(new StubLogger(), settings, spy));
@@ -433,12 +569,11 @@ namespace OmniFlattener.Tests
         [Fact]
         public void Concurrent_checks_do_not_cause_double_flatten()
         {
-            var (engine, settings, spy) = Make();
-            var follower = (StubAccount)settings.FollowerList[0];
+            var (engine, settings, spy, leader, follower) = Make();
             follower.Orders.Add(MakeOrder("O1"));
 
             var threads = Enumerable.Range(0, 10)
-                .Select(_ => new Thread(() => engine.CheckLeaderIsFlat("concurrent")))
+                .Select(_ => new Thread(() => engine.Check("concurrent")))
                 .ToList();
 
             threads.ForEach(t => t.Start());
@@ -454,11 +589,10 @@ namespace OmniFlattener.Tests
         [Fact]
         public void Dispose_cancels_pending_sync_delay()
         {
-            var (engine, settings, spy) = Make(syncDelayMs: 2000);
-            var follower = (StubAccount)settings.FollowerList[0];
+            var (engine, settings, spy, leader, follower) = Make(syncDelayMs: 2000);
             follower.Orders.Add(MakeOrder("O1"));
 
-            engine.CheckLeaderIsFlat("event");
+            engine.Check("event");
             engine.Dispose();
 
             Thread.Sleep(2500);
@@ -467,14 +601,13 @@ namespace OmniFlattener.Tests
         }
 
         [Fact]
-        public void CheckLeaderIsFlat_after_dispose_is_noop()
+        public void Check_after_dispose_is_noop()
         {
-            var (engine, settings, spy) = Make();
-            var follower = (StubAccount)settings.FollowerList[0];
+            var (engine, settings, spy, leader, follower) = Make();
             follower.Orders.Add(MakeOrder("O1"));
 
             engine.Dispose();
-            engine.CheckLeaderIsFlat("test");
+            engine.Check("test");
 
             Assert.Empty(spy.CancelledOrders);
         }

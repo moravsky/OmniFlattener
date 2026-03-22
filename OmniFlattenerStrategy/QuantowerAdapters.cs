@@ -105,17 +105,23 @@ namespace OmniFlattener
         private readonly HashSet<string> _disabledFollowers;
         private readonly int             _syncDelayMs;
         private readonly int             _refreshIntervalMs;
+        private readonly bool            _eodEnabled;
+        private readonly TimeSpan        _eodFlattenAt;
 
         public FlattenSettings(
             string          leaderName,
             HashSet<string> disabledFollowers,
             int             syncDelayMs,
-            int             refreshIntervalMs)
+            int             refreshIntervalMs,
+            bool            eodEnabled,
+            TimeSpan        eodFlattenAt)
         {
             _leaderName        = leaderName        ?? throw new ArgumentNullException(nameof(leaderName));
             _disabledFollowers = disabledFollowers ?? throw new ArgumentNullException(nameof(disabledFollowers));
             _syncDelayMs       = syncDelayMs;
             _refreshIntervalMs = refreshIntervalMs;
+            _eodEnabled        = eodEnabled;
+            _eodFlattenAt      = eodFlattenAt;
         }
 
         public IAccountView? Leader
@@ -128,16 +134,21 @@ namespace OmniFlattener
             }
         }
 
-        public IReadOnlyList<IAccountView> Followers =>
+        public IReadOnlyList<IAccountView> AllAccounts =>
             Core.Instance.Accounts
                 .Where(a => a.State == BusinessObjectState.Normal
-                    && a.Name != _leaderName
                     && !_disabledFollowers.Contains(a.Name))
                 .Select(a => (IAccountView)new QuantowerAccountView(a))
                 .ToList();
 
-        public int SyncDelayMs       => _syncDelayMs;
-        public int RefreshIntervalMs => _refreshIntervalMs;
+        public int      SyncDelayMs      => _syncDelayMs;
+        public int      RefreshIntervalMs => _refreshIntervalMs;
+        public bool     EodEnabled        => _eodEnabled;
+        public TimeSpan EodFlattenAt      => _eodFlattenAt;
+
+        public DateTime Now =>
+            Core.Instance.TimeUtils.ConvertFromUTCToSelectedTimeZone(
+                Core.Instance.TimeUtils.DateTimeUtcNow);
     }
 
     public class FlattenContext : IFlattenContext

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 
 namespace OmniFlattener
@@ -23,19 +24,27 @@ namespace OmniFlattener
         IAccountView? Leader { get; }
 
         /// <summary>
-        /// Resolved fresh on every call: all active accounts except the leader,
-        /// minus any the user explicitly disabled. New or reconnected accounts
-        /// appear automatically.
+        /// Resolved fresh on every call: all active accounts minus disabled ones (leader included).
+        /// The engine derives followers by excluding the leader.
         /// </summary>
-        IReadOnlyList<IAccountView> Followers { get; }
+        IReadOnlyList<IAccountView> AllAccounts { get; }
 
         int SyncDelayMs { get; }
 
         /// <summary>
-        /// How often the engine checks accounts state.
-        /// The engine does not start a refresh timer when this is 0.
+        /// How often the engine checks account state. 0 suppresses the timer (tests).
         /// </summary>
         int RefreshIntervalMs { get; }
+
+        // ── EOD ───────────────────────────────────────────────────────────────
+
+        bool     EodEnabled   { get; }
+        TimeSpan EodFlattenAt { get; }
+
+        /// <summary>
+        /// Current time in the user's selected timezone. Injected so tests control the clock.
+        /// </summary>
+        DateTime Now { get; }
     }
 
     public interface IFlattenService

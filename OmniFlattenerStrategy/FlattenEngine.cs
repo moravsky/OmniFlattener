@@ -6,41 +6,32 @@ using System.Threading;
 namespace OmniFlattener
 {
     /// <summary>
-    /// Watches the leader account and flattens all followers when the leader goes flat.
+    /// Watches the leader account and flattens followers when the leader goes flat,
+    /// and flattens all accounts (leader included) at a configured time of day (EOD).
     ///
-    /// Leader and followers are resolved from IFlattenSettings on every check, so
-    /// reconnections and new accounts are picked up automatically without restarting.
+    /// Both checks share the same refresh timer — no second timer needed.
     ///
-    /// If the leader is not currently connected, IsLeaderFlat() returns false —
-    /// the engine stands by safely until the leader comes back.
+    /// Leader-flat path: sync delay → double-check → flatten followers only.
+    /// EOD path: no sync delay (time-sensitive) → flatten all accounts.
     ///
-    /// When the leader first goes flat a sync delay starts. If the leader resumes before
-    /// it elapses the delay is cancelled. If the leader is still flat when it elapses,
-    /// all follower orders are cancelled and positions closed at market.
-    ///
-    /// The sync delay should be longer than fill propagation lag so that any remaining
-    /// orders and positions on followers are in fact ghosts.
-    /// Once a flat window opens it does not re-arm on repeated checks — only a
-    /// non-flat → flat transition starts a new sync delay.
-    ///
-    /// The engine owns the refresh timer. When RefreshIntervalMs > 0 a timer is started
-    /// on construction as a backstop for any order/position events that may be missed.
-    /// Set RefreshIntervalMs to 0 in tests to suppress the timer entirely.
+    /// EOD scheduling: on construction, _nextEodFlattenAt is set to today's FlattenAt
+    /// time. If that moment is already past, it advances to tomorrow. This means
+    /// recreating the strategy after the deadline correctly schedules for the next day.
+    /// After each EOD fire, advance by one day. Adding one day to a local DateTime
+    /// handles DST correctly — the wall-clock time stays the same.
     /// </summary>
     public class FlattenEngine : IDisposable
     {
-        private readonly IFlattenContext  _ctx;
-        private readonly Timer?           _refreshTimer;
+        private readonly IFlattenContext _ctx;
+        private readonly Timer?          _refreshTimer;
 
-        private readonly object            _lock = new object();
-        private CancellationTokenSource?  _syncDelayCts;
+        private readonly object           _lock = new object();
+        private CancellationTokenSource? _syncDelayCts;
 
-        // True from first detection of leader flat until leader resumes.
-        // Prevents re-arming the sync delay on repeated or concurrent checks.
         private bool _inFlatWindow;
-
-        // Suppresses the "nothing to do" log after the first clean sweep in a flat window.
         private bool _alreadyFlattenedThisCycle;
+
+        private DateTime _nextEodFlattenAt;
 
         private bool _disposed;
 
@@ -48,18 +39,21 @@ namespace OmniFlattener
         {
             _ctx = ctx ?? throw new ArgumentNullException(nameof(ctx));
 
+            _nextEodFlattenAt = ComputeNextEodFlattenAt(ctx.Settings.Now, ctx.Settings.EodFlattenAt);
+
             if (ctx.Settings.RefreshIntervalMs > 0)
             {
                 var interval = TimeSpan.FromMilliseconds(ctx.Settings.RefreshIntervalMs);
-                _refreshTimer = new Timer(_ => CheckLeaderIsFlat("refresh"), null, interval, interval);
+                _refreshTimer = new Timer(_ => Check("refresh"), null, interval, interval);
             }
         }
 
         /// <summary>
         /// Called on every trigger (order/position event or refresh timer).
+        /// Handles both leader-flat detection and EOD flattening.
         /// Thread-safe: drops if engine is already processing.
         /// </summary>
-        public void CheckLeaderIsFlat(string source)
+        public void Check(string source)
         {
             if (_disposed) return;
 
@@ -79,6 +73,25 @@ namespace OmniFlattener
         {
             if (_disposed) return;
 
+            CheckEod(source);
+            CheckLeaderIsFlat(source);
+        }
+
+        private void CheckEod(string source)
+        {
+            if (!_ctx.Settings.EodEnabled) return;
+
+            var now = _ctx.Settings.Now;
+            if (now < _nextEodFlattenAt) return;
+
+            _ctx.Logger.Log($"[{source}] EOD flatten at {_ctx.Settings.EodFlattenAt:hh\\:mm} reached — flattening all accounts.");
+            FlattenAll(_ctx.Settings.AllAccounts);
+
+            _nextEodFlattenAt = _nextEodFlattenAt.AddDays(1);
+        }
+
+        private void CheckLeaderIsFlat(string source)
+        {
             bool leaderIsFlat = IsLeaderFlat();
 
             if (leaderIsFlat)
@@ -138,10 +151,6 @@ namespace OmniFlattener
             _syncDelayCts = null;
         }
 
-        /// <param name="acquireLock">
-        /// False when called inline (already under _lock).
-        /// True from the threadpool — must re-acquire _lock for the double-check.
-        /// </param>
         private void OnSyncDelayElapsed(CancellationToken token, bool acquireLock)
         {
             if (acquireLock)
@@ -159,8 +168,12 @@ namespace OmniFlattener
                     return;
                 }
 
-                _ctx.Logger.Log("[sync] Leader still flat — executing OmniFlattener.");
-                FlattenAll(_ctx.Settings.Followers);
+                _ctx.Logger.Log("[sync] Leader still flat — flattening followers.");
+                var leaderName = _ctx.Settings.Leader?.AccountName;
+                var followers  = _ctx.Settings.AllAccounts
+                    .Where(a => a.AccountName != leaderName)
+                    .ToList();
+                FlattenAll(followers);
                 _syncDelayCts = null;
             }
             finally
@@ -178,7 +191,7 @@ namespace OmniFlattener
             if (orders.Count == 0 && positions.Count == 0)
             {
                 if (!_alreadyFlattenedThisCycle)
-                    _ctx.Logger.Log("[flatten] No follower orders or positions to flatten.");
+                    _ctx.Logger.Log("[flatten] Nothing to flatten.");
                 _alreadyFlattenedThisCycle = true;
                 return;
             }
@@ -200,17 +213,25 @@ namespace OmniFlattener
             }
         }
 
-        /// <summary>
-        /// Returns false if the leader is not currently connected — safe default, no flatten fires.
-        /// </summary>
         private bool IsLeaderFlat()
         {
             var leader = _ctx.Settings.Leader;
-            if (leader == null)
-                return false;
+            if (leader == null) return false;
 
             return leader.GetOpenOrders().Count == 0 &&
                    leader.GetOpenPositions().Count == 0;
+        }
+
+        /// <summary>
+        /// Computes the next wall-clock DateTime at which EOD should fire.
+        /// If today's FlattenAt is still in the future, returns it.
+        /// If it has already passed (including strategy recreation after market close),
+        /// returns tomorrow's FlattenAt — no spurious immediate fire.
+        /// </summary>
+        private static DateTime ComputeNextEodFlattenAt(DateTime now, TimeSpan flattenAt)
+        {
+            var flattenAtToday = now.Date + flattenAt;
+            return now > flattenAtToday ? flattenAtToday.AddDays(1) : flattenAtToday;
         }
 
         public void Dispose()

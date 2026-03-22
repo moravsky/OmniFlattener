@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using TradingPlatform.BusinessLayer;
@@ -6,18 +7,15 @@ namespace OmniFlattener
 {
     public partial class OmniFlattenerStrategy
     {
-        public string? LeaderAccountName { get; set; }
-        public int     SyncDelayMs       { get; set; } = 3000;
-        public int     RefreshIntervalMs { get; set; } = 5000;
+        public string?   LeaderAccountName { get; set; }
+        public int       SyncDelayMs       { get; set; } = 3000;
+        public int       RefreshIntervalMs { get; set; } = 5000;
+        public bool      EodEnabled        { get; set; } = true;
+        public TimeSpan  EodFlattenAt      { get; set; } = new TimeSpan(16, 59, 0);
 
-        // Accounts the user explicitly opted out of. Everything else is flattened,
-        // including new accounts that appear after the strategy started.
-        private readonly HashSet<string> _disabledFollowers = new();
-
+        private readonly HashSet<string>   _disabledFollowers  = new();
         private readonly List<SettingItem> _additionalSettings = [];
 
-        // Rebuilt on every Settings.get so the account list reflects the current
-        // connected set without requiring a strategy restart.
         public override IList<SettingItem> Settings
         {
             get
@@ -37,7 +35,13 @@ namespace OmniFlattener
         private void BuildSettings()
         {
             _additionalSettings.Clear();
+            _additionalSettings.Add(BuildAccountsGroup());
+            BuildTimingSettings();
+            BuildEodSettings();
+        }
 
+        private SettingItemGroup BuildAccountsGroup()
+        {
             var leaderSetting = new SettingItemAccount(
                 "Leader account",
                 Core.Instance.Accounts.FirstOrDefault(a => a.Name == LeaderAccountName),
@@ -49,7 +53,7 @@ namespace OmniFlattener
                     LeaderAccountName = (leaderSetting.Value as Account)?.Name;
             };
 
-            var accountSettings = new List<SettingItem> { leaderSetting };
+            var items     = new List<SettingItem> { leaderSetting };
             int sortIndex = 20;
 
             foreach (var account in Core.Instance.Accounts
@@ -58,7 +62,7 @@ namespace OmniFlattener
             {
                 if (account.Name == LeaderAccountName) continue;
 
-                var name    = account.Name;
+                var  name   = account.Name;
                 bool enable = !_disabledFollowers.Contains(name);
 
                 var checkbox = new SettingItemBoolean(name, enable, sortIndex++);
@@ -71,14 +75,22 @@ namespace OmniFlattener
                     else         _disabledFollowers.Add(name);
                 };
 
-                accountSettings.Add(checkbox);
+                items.Add(checkbox);
             }
+
+            return new SettingItemGroup("Accounts", items);
+        }
+
+        private void BuildTimingSettings()
+        {
+            var timingGroup = new SettingItemSeparatorGroup("Timing");
 
             var syncDelaySetting = new SettingItemInteger("Sync delay (ms)", SyncDelayMs, sortIndex: 10)
             {
-                Minimum = 0,
-                Maximum = 30000,
-                Description = """
+                Minimum        = 0,
+                Maximum        = 30000,
+                SeparatorGroup = timingGroup,
+                Description    = """
                     Milliseconds to wait after detecting leader is flat before acting.
                     Absorbs TradeSyncer fill propagation lag (~1-2s).
                     If the leader resumes within this window the flatten is cancelled.
@@ -92,9 +104,10 @@ namespace OmniFlattener
 
             var refreshIntervalSetting = new SettingItemInteger("Refresh interval (ms)", RefreshIntervalMs, sortIndex: 20)
             {
-                Minimum = 100,
-                Maximum = 60000,
-                Description = "Backstop refresh frequency. Catches anything missed by order/position events.",
+                Minimum        = 100,
+                Maximum        = 60000,
+                SeparatorGroup = timingGroup,
+                Description    = "Backstop refresh frequency. Catches anything missed by order/position events.",
             };
             refreshIntervalSetting.PropertyChanged += (s, e) =>
             {
@@ -102,14 +115,79 @@ namespace OmniFlattener
                     RefreshIntervalMs = p;
             };
 
-            _additionalSettings.Add(new SettingItemGroup("Accounts", accountSettings));
-
-            var timingGroup = new SettingItemSeparatorGroup("Timing");
-            syncDelaySetting.SeparatorGroup    = timingGroup;
-            refreshIntervalSetting.SeparatorGroup = timingGroup;
-
             _additionalSettings.Add(syncDelaySetting);
             _additionalSettings.Add(refreshIntervalSetting);
+        }
+
+        private void BuildEodSettings()
+        {
+            var eodGroup = new SettingItemSeparatorGroup("EOD Protection");
+
+            var enabledSetting = new SettingItemBoolean("Enabled", EodEnabled, sortIndex: 30)
+            {
+                SeparatorGroup = eodGroup,
+            };
+            enabledSetting.PropertyChanged += (s, e) =>
+            {
+                if (e.PropertyName == nameof(SettingItem.Value) && enabledSetting.Value is bool enabled)
+                    EodEnabled = enabled;
+            };
+
+            // Session template selector — pre-fills FlattenAt from primary session close time
+            var templateNames = Core.Instance.CustomSessions
+                .Select(c => c.Name)
+                .ToList();
+
+            var templateSetting = new SettingItemSelector(
+                "Session template",
+                templateNames.FirstOrDefault() ?? "",
+                templateNames,
+                sortIndex: 40)
+            {
+                SeparatorGroup = eodGroup,
+                Description    = "Selecting a template sets Flatten At to 2 minutes before the primary session close time.",
+            };
+
+            var flattenAtSetting = new SettingItemDateTime(
+                "Flatten At",
+                DateTime.Today + EodFlattenAt,
+                sortIndex: 50)
+            {
+                SeparatorGroup = eodGroup,
+                Description    = "Time of day (in your Quantower timezone) to flatten all accounts.",
+            };
+            flattenAtSetting.PropertyChanged += (s, e) =>
+            {
+                if (e.PropertyName == nameof(SettingItem.Value) && flattenAtSetting.Value is DateTime dt)
+                    EodFlattenAt = dt.TimeOfDay;
+            };
+
+            // Template selection pre-fills FlattenAt then steps aside
+            templateSetting.PropertyChanged += (s, e) =>
+            {
+                if (e.PropertyName != nameof(SettingItem.Value)) return;
+
+                var selectedName = templateSetting.Value as string;
+                if (string.IsNullOrEmpty(selectedName)) return;
+
+                var container = Core.Instance.CustomSessions
+                    .FirstOrDefault(c => c.Name == selectedName);
+                if (container == null) return;
+
+                var primarySession =
+                    container.ActiveSessions.FirstOrDefault(sess => sess.IsPrimary && sess.Type == SessionType.Main)
+                    ?? container.ActiveSessions.FirstOrDefault(sess => sess.Type == SessionType.Main)
+                    ?? container.ActiveSessions.FirstOrDefault();
+
+                if (primarySession == null) return;
+
+                EodFlattenAt           = primarySession.CloseTime.Subtract(TimeSpan.FromMinutes(2));
+                flattenAtSetting.Value = DateTime.Today + EodFlattenAt;
+            };
+
+            _additionalSettings.Add(enabledSetting);
+            _additionalSettings.Add(templateSetting);
+            _additionalSettings.Add(flattenAtSetting);
         }
     }
 }
