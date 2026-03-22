@@ -128,9 +128,7 @@ namespace OmniFlattener
         public bool     EodEnabled        => eodEnabled;
         public TimeSpan EodFlattenAt      => eodFlattenAt;
 
-        public DateTime Now =>
-            Core.Instance.TimeUtils.ConvertFromUTCToSelectedTimeZone(
-                Core.Instance.TimeUtils.DateTimeUtcNow);
+        public DateTime Now => DateTime.Now;
     }
 
     public class FlattenContext(IFlattenLogger logger, IFlattenSettings settings, IFlattenService flattenService)
