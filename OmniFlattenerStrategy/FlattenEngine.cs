@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
+using AutoSizeStrategy;
 
 namespace OmniFlattener
 {
@@ -28,6 +29,9 @@ namespace OmniFlattener
         private readonly object _lock = new object();
         private CancellationTokenSource? _syncDelayCts;
 
+        private readonly TrackingSet<string> _pendingCancelOrders = new();
+        private readonly TrackingSet<string> _pendingClosePositions = new();
+
         private bool _alreadyFlattenedThisCycle;
 
         private DateTime _nextEodFlattenAt;
@@ -39,7 +43,8 @@ namespace OmniFlattener
             _ctx = ctx ?? throw new ArgumentNullException(nameof(ctx));
 
             _nextEodFlattenAt = ComputeNextEodFlattenAt(ctx.Settings.Now, ctx.Settings.EodFlattenAt);
-            _ctx.Logger.LogInfo($"EOD protection: {(_ctx.Settings.EodEnabled ? $"enabled, flatten at {_nextEodFlattenAt}" : "disabled")}");
+            _ctx.Logger.LogInfo(
+                $"EOD protection: {(_ctx.Settings.EodEnabled ? $"enabled, flatten at {_nextEodFlattenAt}" : "disabled")}");
 
             if (ctx.Settings.RefreshIntervalMs > 0)
             {
@@ -119,7 +124,8 @@ namespace OmniFlattener
             // Otherwise we just noticed the flat state. Start the clock.
             if (!_alreadyFlattenedThisCycle)
             {
-                _ctx.Logger.LogInfo($"[{source}] Leader is flat — sync delay started ({_ctx.Settings.SyncDelayMs}ms)...");
+                _ctx.Logger.LogInfo(
+                    $"[{source}] Leader is flat — sync delay started ({_ctx.Settings.SyncDelayMs}ms)...");
                 StartSyncDelay();
                 return;
             }
@@ -191,7 +197,7 @@ namespace OmniFlattener
                 }
 
                 _ctx.Logger.LogInfo("[sync] Leader still flat — flattening followers.");
-                
+
                 FlattenAll(GetFollowers());
             }
             catch (Exception ex)
@@ -225,16 +231,25 @@ namespace OmniFlattener
 
             foreach (var order in orders)
             {
-                _ctx.Logger.LogInfo($"[flatten] Cancelling order {order.Id} on '{order.AccountName}' " +
-                                $"({order.Side} x{order.Quantity} {order.Symbol} @ {order.Price})");
-                _ctx.FlattenService.CancelOrder(order);
+                // TryTrack returns false if it's already in the set, skipping the duplicate!
+                if (_pendingCancelOrders.TryTrack(order.Id))
+                {
+                    _ctx.Logger.LogInfo($"[flatten] Cancelling order {order.Id} on '{order.AccountName}' " +
+                                        $"({order.Side} x{order.Quantity} {order.Symbol} @ {order.Price})");
+                    _ctx.FlattenService.CancelOrder(order);
+                }
             }
 
             foreach (var position in positions)
             {
-                _ctx.Logger.LogInfo($"[flatten] Closing position on '{position.AccountName}' " +
-                                $"({position.Side} x{Math.Abs(position.Quantity)} {position.Symbol}) at market");
-                _ctx.FlattenService.ClosePositionAtMarket(position);
+                var posKey = $"{position.AccountName}_{position.Symbol}";
+
+                if (_pendingClosePositions.TryTrack(posKey))
+                {
+                    _ctx.Logger.LogInfo($"[flatten] Closing position on '{position.AccountName}' " +
+                                        $"({position.Side} x{Math.Abs(position.Quantity)} {position.Symbol}) at market");
+                    _ctx.FlattenService.ClosePositionAtMarket(position);
+                }
             }
         }
 
@@ -272,6 +287,8 @@ namespace OmniFlattener
             if (disposing)
             {
                 _refreshTimer?.Dispose();
+                _pendingCancelOrders.Dispose();
+                _pendingClosePositions.Dispose();
 
                 Monitor.Enter(_lock);
                 try
