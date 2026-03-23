@@ -9,12 +9,17 @@ namespace OmniFlattener
     {
         public string?   LeaderAccountName { get; set; }
         public int       SyncDelayMs       { get; set; } = 3000;
-        public int       RefreshIntervalMs { get; set; } = 5000;
+        public int       RefreshIntervalMs { get; set; } = 1000;
         public bool      EodEnabled        { get; set; } = true;
-        public TimeSpan  EodFlattenAt      { get; set; } = new TimeSpan(16, 59, 0);
+        public TimeSpan EodFlattenAt
+        {
+            get => _eodFlattenAt ?? new TimeSpan(13, 58, 0); // Safe fallback for the engine
+            set => _eodFlattenAt = value;
+        }
 
         private readonly HashSet<string>   _disabledFollowers  = new();
         private readonly List<SettingItem> _additionalSettings = [];
+        private TimeSpan? _eodFlattenAt;
 
         public override IList<SettingItem> Settings
         {
@@ -156,7 +161,7 @@ namespace OmniFlattener
             flattenAtSetting.PropertyChanged += (_, e) =>
             {
                 if (e.PropertyName == nameof(SettingItem.Value) && flattenAtSetting.Value is DateTime dt)
-                    EodFlattenAt = dt.TimeOfDay;
+                    EodFlattenAt = dt.ToLocalTime().TimeOfDay;
             };
 
             templateSetting.PropertyChanged += (_, e) =>
@@ -164,8 +169,11 @@ namespace OmniFlattener
                 if (e.PropertyName == nameof(SettingItem.Value)) ApplyTemplate();
             };
 
-            // Apply immediately so Flatten At is in machine local time on first open
-            ApplyTemplate();
+            // Apply automatically ONLY if the user hasn't set a time yet
+            if (_eodFlattenAt == null)
+            {
+                ApplyTemplate();
+            }
 
             void ApplyTemplate()
             {
@@ -187,7 +195,7 @@ namespace OmniFlattener
                 var closeLocal = TimeZoneInfo.ConvertTimeFromUtc(
                     DateTime.UtcNow.Date + primarySession.CloseTime,
                     TimeZoneInfo.Local);
-                EodFlattenAt           = closeLocal.TimeOfDay - TimeSpan.FromMinutes(2);
+                EodFlattenAt           = closeLocal.TimeOfDay - TimeSpan.FromMinutes(17);
                 flattenAtSetting.Value = DateTime.Today + EodFlattenAt;
             }
 

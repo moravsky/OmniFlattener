@@ -30,15 +30,15 @@ The sync delay (default 3s) is intentionally longer than fill propagation lag (~
 ### Accounts tab
 | Setting | Default | Description |
 |---|---|---|
-| **Leader account** | — | The account to watch. |
+| **Leader account** | — | The account to watch. Could be left blank if only EOD protection is needed |
 | **Follower checkboxes** | all checked | One checkbox per non-leader connected account. Uncheck to exclude. Close and reopen the settings panel after changing the leader to refresh this list. New accounts are included automatically. |
 
 ### View tab — EOD Protection
 | Setting | Default | Description |
 |---|---|---|
 | **Enabled** | `true` | Whether EOD flattening is active. |
-| **Session template** | CME Indexes Full day | Pre-fills Flatten At from the session's primary close time (2 min before). |
-| **Flatten At** | `16:58` | Date and time to flatten all accounts, in machine local time. |
+| **Session template** | CME Indexes Full day | Pre-fills Flatten At from the session's primary close time (17 min before). |
+| **Flatten At** | `16:43` | Date and time to flatten all accounts, in machine local time. |
 
 ### View tab — Timing
 | Setting | Default | Description |

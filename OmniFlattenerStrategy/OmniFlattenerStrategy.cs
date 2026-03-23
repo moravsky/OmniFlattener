@@ -20,8 +20,7 @@ namespace OmniFlattener
             this.LogInfo($"Leader:       {(string.IsNullOrWhiteSpace(LeaderAccountName) ? "(none — EOD protection only)" : LeaderAccountName)}");
             this.LogInfo($"Disabled:     {(_disabledFollowers.Count > 0 ? string.Join(", ", _disabledFollowers) : "(none)")}");
             this.LogInfo($"Sync delay:   {SyncDelayMs}ms | Refresh: {RefreshIntervalMs}ms");
-            this.LogInfo($"EOD:          {(EodEnabled ? $"enabled, flatten at {EodFlattenAt:hh\\:mm}" : "disabled")}");
-
+            
             var ctx = new FlattenContext(
                 logger: new StrategyLogger(this),
                 settings: new FlattenSettings(
