@@ -17,6 +17,7 @@ namespace OmniFlattener
 
         protected override void OnRun()
         {
+            this.LogInfo($"Copy protect: {(CopyProtectionEnabled ? "enabled" : "disabled")}");
             this.LogInfo($"Leader:       {(string.IsNullOrWhiteSpace(LeaderAccountName) ? "(none — EOD protection only)" : LeaderAccountName)}");
             this.LogInfo($"Disabled:     {(_disabledFollowers.Count > 0 ? string.Join(", ", _disabledFollowers) : "(none)")}");
             this.LogInfo($"Sync delay:   {SyncDelayMs}ms | Refresh: {RefreshIntervalMs}ms");
@@ -28,6 +29,7 @@ namespace OmniFlattener
                     disabledFollowers: _disabledFollowers,
                     syncDelayMs:       SyncDelayMs,
                     refreshIntervalMs: RefreshIntervalMs,
+                    copyProtectionEnabled: CopyProtectionEnabled,
                     eodEnabled:        EodEnabled,
                     eodFlattenAt:      EodFlattenAt
                 ),

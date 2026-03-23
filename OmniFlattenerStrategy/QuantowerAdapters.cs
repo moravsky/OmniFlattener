@@ -102,6 +102,7 @@ namespace OmniFlattener
         HashSet<string> disabledFollowers,
         int syncDelayMs,
         int refreshIntervalMs,
+        bool copyProtectionEnabled,
         bool eodEnabled,
         TimeSpan eodFlattenAt)
         : IFlattenSettings
@@ -130,6 +131,7 @@ namespace OmniFlattener
 
         public int SyncDelayMs => syncDelayMs;
         public int RefreshIntervalMs => refreshIntervalMs;
+        public bool CopyProtectionEnabled => copyProtectionEnabled;
         public bool EodEnabled => eodEnabled;
         public TimeSpan EodFlattenAt => eodFlattenAt;
 

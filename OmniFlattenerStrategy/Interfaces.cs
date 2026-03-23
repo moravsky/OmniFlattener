@@ -36,9 +36,7 @@ namespace OmniFlattener
         /// How often the engine checks account state. 0 suppresses the timer (tests).
         /// </summary>
         int RefreshIntervalMs { get; }
-
-        // ── EOD ───────────────────────────────────────────────────────────────
-
+        bool CopyProtectionEnabled { get; }
         bool EodEnabled { get; }
         TimeSpan EodFlattenAt { get; }
 
