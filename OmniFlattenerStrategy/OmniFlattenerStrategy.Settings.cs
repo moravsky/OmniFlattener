@@ -7,17 +7,19 @@ namespace OmniFlattener
 {
     public partial class OmniFlattenerStrategy
     {
-        public string?   LeaderAccountName { get; set; }
-        public int       SyncDelayMs       { get; set; } = 3000;
-        public int       RefreshIntervalMs { get; set; } = 1000;
-        public bool      EodEnabled        { get; set; } = true;
+        public bool CopyProtectionEnabled { get; set; } = true;
+        public string? LeaderAccountName { get; set; }
+        public int SyncDelayMs { get; set; } = 3000;
+        public int RefreshIntervalMs { get; set; } = 1000;
+        public bool EodEnabled { get; set; } = true;
+
         public TimeSpan EodFlattenAt
         {
             get => _eodFlattenAt ?? new TimeSpan(13, 58, 0); // Safe fallback for the engine
             set => _eodFlattenAt = value;
         }
 
-        private readonly HashSet<string>   _disabledFollowers  = new();
+        private readonly HashSet<string> _disabledFollowers = new();
         private readonly List<SettingItem> _additionalSettings = [];
         private TimeSpan? _eodFlattenAt;
 
@@ -36,8 +38,9 @@ namespace OmniFlattener
         {
             _additionalSettings.Clear();
             _additionalSettings.Add(BuildAccountsGroup());
-            BuildTimingSettings();
+            BuildCopyProtectionSettings();
             BuildEodSettings();
+            BuildTimingSettings();
         }
 
         private SettingItemGroup BuildAccountsGroup()
@@ -53,16 +56,16 @@ namespace OmniFlattener
                     LeaderAccountName = (leaderSetting.Value as Account)?.Name;
             };
 
-            var items     = new List<SettingItem> { leaderSetting };
+            var items = new List<SettingItem> { leaderSetting };
             int sortIndex = 20;
 
             foreach (var account in Core.Instance.Accounts
-                .Where(a => a.State == BusinessObjectState.Normal)
-                .OrderBy(a => a.Name))
+                         .Where(a => a.State == BusinessObjectState.Normal)
+                         .OrderBy(a => a.Name))
             {
                 if (account.Name == LeaderAccountName) continue;
 
-                var  name   = account.Name;
+                var name = account.Name;
                 bool enable = !_disabledFollowers.Contains(name);
 
                 var checkbox = new SettingItemBoolean(name, enable, sortIndex++);
@@ -72,7 +75,7 @@ namespace OmniFlattener
                         return;
 
                     if (enabled) _disabledFollowers.Remove(name);
-                    else         _disabledFollowers.Add(name);
+                    else _disabledFollowers.Add(name);
                 };
 
                 items.Add(checkbox);
@@ -81,49 +84,29 @@ namespace OmniFlattener
             return new SettingItemGroup("Accounts", items);
         }
 
-        private void BuildTimingSettings()
+        private void BuildCopyProtectionSettings()
         {
-            var timingGroup = new SettingItemSeparatorGroup("Timing");
+            var copyGroup = new SettingItemSeparatorGroup("COPY TRADING PROTECTION");
 
-            var syncDelaySetting = new SettingItemInteger("Sync delay (ms)", SyncDelayMs, sortIndex: 10)
+            var enabledSetting = new SettingItemBoolean("Enabled", CopyProtectionEnabled, sortIndex: 10)
             {
-                Minimum        = 0,
-                Maximum        = 30000,
-                SeparatorGroup = timingGroup,
-                Description    = """
-                    Milliseconds to wait after detecting leader is flat before acting.
-                    Absorbs TradeSyncer fill propagation lag (~1-2s).
-                    If the leader resumes within this window the flatten is cancelled.
-                    """,
-            };
-            syncDelaySetting.PropertyChanged += (_, e) =>
-            {
-                if (e.PropertyName == nameof(SettingItem.Value) && syncDelaySetting.Value is int d)
-                    SyncDelayMs = d;
+                SeparatorGroup = copyGroup,
             };
 
-            var refreshIntervalSetting = new SettingItemInteger("Refresh interval (ms)", RefreshIntervalMs, sortIndex: 20)
+            enabledSetting.PropertyChanged += (_, e) =>
             {
-                Minimum        = 100,
-                Maximum        = 60000,
-                SeparatorGroup = timingGroup,
-                Description    = "Backstop refresh frequency. Catches anything missed by order/position events.",
-            };
-            refreshIntervalSetting.PropertyChanged += (_, e) =>
-            {
-                if (e.PropertyName == nameof(SettingItem.Value) && refreshIntervalSetting.Value is int p)
-                    RefreshIntervalMs = p;
+                if (e.PropertyName == nameof(SettingItem.Value) && enabledSetting.Value is bool enabled)
+                    CopyProtectionEnabled = enabled;
             };
 
-            _additionalSettings.Add(syncDelaySetting);
-            _additionalSettings.Add(refreshIntervalSetting);
+            _additionalSettings.Add(enabledSetting);
         }
 
         private void BuildEodSettings()
         {
             var eodGroup = new SettingItemSeparatorGroup("EOD Protection");
 
-            var enabledSetting = new SettingItemBoolean("Enabled", EodEnabled, sortIndex: 30)
+            var enabledSetting = new SettingItemBoolean("Enabled", EodEnabled, sortIndex: 20)
             {
                 SeparatorGroup = eodGroup,
             };
@@ -144,19 +127,20 @@ namespace OmniFlattener
                 "Session template",
                 templateNames.Contains(preferredTemplate) ? preferredTemplate : templateNames.FirstOrDefault() ?? "",
                 templateNames,
-                sortIndex: 40)
+                sortIndex: 30)
             {
                 SeparatorGroup = eodGroup,
-                Description    = "Selecting a template sets Flatten At to 2 minutes before the primary session close time.",
+                Description =
+                    "Selecting a template sets Flatten At to 2 minutes before the primary session close time.",
             };
 
             var flattenAtSetting = new SettingItemDateTime(
                 "Flatten At",
                 DateTime.Today + EodFlattenAt,
-                sortIndex: 50)
+                sortIndex: 40)
             {
                 SeparatorGroup = eodGroup,
-                Description    = "Time of day (in machine local time) to flatten all accounts.",
+                Description = "Time of day (in machine local time) to flatten all accounts.",
             };
             flattenAtSetting.PropertyChanged += (_, e) =>
             {
@@ -195,13 +179,52 @@ namespace OmniFlattener
                 var closeLocal = TimeZoneInfo.ConvertTimeFromUtc(
                     DateTime.UtcNow.Date + primarySession.CloseTime,
                     TimeZoneInfo.Local);
-                EodFlattenAt           = closeLocal.TimeOfDay - TimeSpan.FromMinutes(17);
+                EodFlattenAt = closeLocal.TimeOfDay - TimeSpan.FromMinutes(17);
                 flattenAtSetting.Value = DateTime.Today + EodFlattenAt;
             }
 
             _additionalSettings.Add(enabledSetting);
             _additionalSettings.Add(templateSetting);
             _additionalSettings.Add(flattenAtSetting);
+        }
+
+        private void BuildTimingSettings()
+        {
+            var timingGroup = new SettingItemSeparatorGroup("Timing");
+
+            var syncDelaySetting = new SettingItemInteger("Sync delay (ms)", SyncDelayMs, sortIndex: 50)
+            {
+                Minimum = 0,
+                Maximum = 30000,
+                SeparatorGroup = timingGroup,
+                Description = """
+                              Milliseconds to wait after detecting leader is flat before acting.
+                              Absorbs TradeSyncer fill propagation lag (~1-2s).
+                              If the leader resumes within this window the flatten is cancelled.
+                              """,
+            };
+            syncDelaySetting.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(SettingItem.Value) && syncDelaySetting.Value is int d)
+                    SyncDelayMs = d;
+            };
+
+            var refreshIntervalSetting =
+                new SettingItemInteger("Refresh interval (ms)", RefreshIntervalMs, sortIndex: 60)
+                {
+                    Minimum = 100,
+                    Maximum = 60000,
+                    SeparatorGroup = timingGroup,
+                    Description = "Backstop refresh frequency. Catches anything missed by order/position events.",
+                };
+            refreshIntervalSetting.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(SettingItem.Value) && refreshIntervalSetting.Value is int p)
+                    RefreshIntervalMs = p;
+            };
+
+            _additionalSettings.Add(syncDelaySetting);
+            _additionalSettings.Add(refreshIntervalSetting);
         }
     }
 }

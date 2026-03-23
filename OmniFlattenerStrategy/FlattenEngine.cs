@@ -102,6 +102,8 @@ namespace OmniFlattener
 
         private void CheckLeaderIsFlat(string source)
         {
+            if (!_ctx.Settings.CopyProtectionEnabled) return;
+            
             // Leader is NOT flat. Reset everything and return.
             if (!IsLeaderFlat())
             {

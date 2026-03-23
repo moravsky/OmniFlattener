@@ -33,6 +33,11 @@ The sync delay (default 3s) is intentionally longer than fill propagation lag (~
 | **Leader account** | — | The account to watch. Could be left blank if only EOD protection is needed |
 | **Follower checkboxes** | all checked | One checkbox per non-leader connected account. Uncheck to exclude. Close and reopen the settings panel after changing the leader to refresh this list. New accounts are included automatically. |
 
+### View tab — Copy Trading Protection
+| Setting | Default | Description |
+|---|---|---|
+| **Enabled** | `true` | Whether copy trading protection is active. |
+
 ### View tab — EOD Protection
 | Setting | Default | Description |
 |---|---|---|

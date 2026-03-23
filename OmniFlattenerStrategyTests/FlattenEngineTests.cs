@@ -46,6 +46,7 @@ namespace OmniFlattener.Tests
             public IReadOnlyList<IAccountView> AllAccounts => AllAccountList;
             public int SyncDelayMs { get; init; }
             public int RefreshIntervalMs { get; init; }
+            public bool CopyProtectionEnabled { get; set; } = true;
             public bool EodEnabled { get; set; }
             public TimeSpan EodFlattenAt { get; set; } = new TimeSpan(16, 59, 0);
 
@@ -186,6 +187,22 @@ namespace OmniFlattener.Tests
             engine.Check("position-event");
 
             Assert.Single(spy.ClosedPositions);
+        }
+
+        [Fact]
+        public void Copy_protection_disabled_ignores_leader_flat()
+        {
+            var (engine, settings, spy, _, follower) = Make();
+            settings.CopyProtectionEnabled = false; // Turn the new setting off
+
+            follower.Orders.Add(MakeOrder("O1"));
+            follower.Positions.Add(MakePosition());
+
+            engine.Check("test");
+
+            // Engine should completely ignore the fact that the leader is flat
+            Assert.Empty(spy.CancelledOrders);
+            Assert.Empty(spy.ClosedPositions);
         }
 
         #endregion
