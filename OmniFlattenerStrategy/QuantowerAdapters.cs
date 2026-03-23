@@ -16,13 +16,13 @@ namespace OmniFlattener
                 .Where(o => o.Account.Id == _account.Id && IsOpenOrder(o))
                 .Select(o => new OrderSnapshot
                 {
-                    Id          = o.Id,
+                    Id = o.Id,
                     AccountName = _account.Name,
-                    Symbol      = o.Symbol?.Name ?? "?",
-                    Side        = o.Side.ToString(),
-                    Quantity    = o.TotalQuantity,
-                    Price       = o.Price,
-                    RawOrder    = o
+                    Symbol = o.Symbol?.Name ?? "?",
+                    Side = o.Side.ToString(),
+                    Quantity = o.TotalQuantity,
+                    Price = o.Price,
+                    RawOrder = o
                 })
                 .ToList();
 
@@ -32,9 +32,9 @@ namespace OmniFlattener
                 .Select(p => new PositionSnapshot
                 {
                     AccountName = _account.Name,
-                    Symbol      = p.Symbol?.Name ?? "?",
-                    Quantity    = p.Quantity,
-                    Side        = p.Quantity > 0 ? "Sell" : "Buy",
+                    Symbol = p.Symbol?.Name ?? "?",
+                    Quantity = p.Quantity,
+                    Side = p.Quantity > 0 ? "Sell" : "Buy",
                     RawPosition = p
                 })
                 .ToList();
@@ -83,15 +83,18 @@ namespace OmniFlattener
 
     public class StrategyLogger : IFlattenLogger
     {
-        private readonly Action<string> _log;
+        private readonly Action<string> _logInfo;
+        private readonly Action<string> _logError;
 
         public StrategyLogger(Strategy strategy)
         {
             if (strategy == null) throw new ArgumentNullException(nameof(strategy));
-            _log = strategy.LogInfo;
+            _logInfo = strategy.LogInfo;
+            _logError = strategy.LogError;
         }
 
-        public void Log(string message) => _log(message);
+        public void LogInfo(string message) => _logInfo(message);
+        public void LogError(string message) => _logError(message);
     }
 
     public class FlattenSettings(
@@ -103,15 +106,17 @@ namespace OmniFlattener
         TimeSpan eodFlattenAt)
         : IFlattenSettings
     {
-        private readonly string          _leaderName = leaderName ?? ""; // empty = no leader, Leader property returns null
-        private readonly HashSet<string> _disabledFollowers = disabledFollowers ?? throw new ArgumentNullException(nameof(disabledFollowers));
+        private readonly string _leaderName = leaderName ?? ""; // empty = no leader, Leader property returns null
+
+        private readonly HashSet<string> _disabledFollowers =
+            disabledFollowers ?? throw new ArgumentNullException(nameof(disabledFollowers));
 
         public IAccountView? Leader
         {
             get
             {
-                var account = Core.Instance.Accounts.FirstOrDefault(
-                    a => a.Name == _leaderName && a.State == BusinessObjectState.Normal);
+                var account = Core.Instance.Accounts.FirstOrDefault(a =>
+                    a.Name == _leaderName && a.State == BusinessObjectState.Normal);
                 return account != null ? new QuantowerAccountView(account) : null;
             }
         }
@@ -119,14 +124,14 @@ namespace OmniFlattener
         public IReadOnlyList<IAccountView> AllAccounts =>
             Core.Instance.Accounts
                 .Where(a => a.State == BusinessObjectState.Normal
-                    && !_disabledFollowers.Contains(a.Name))
+                            && !_disabledFollowers.Contains(a.Name))
                 .Select(a => (IAccountView)new QuantowerAccountView(a))
                 .ToList();
 
-        public int      SyncDelayMs      => syncDelayMs;
-        public int      RefreshIntervalMs => refreshIntervalMs;
-        public bool     EodEnabled        => eodEnabled;
-        public TimeSpan EodFlattenAt      => eodFlattenAt;
+        public int SyncDelayMs => syncDelayMs;
+        public int RefreshIntervalMs => refreshIntervalMs;
+        public bool EodEnabled => eodEnabled;
+        public TimeSpan EodFlattenAt => eodFlattenAt;
 
         public DateTime Now => DateTime.Now;
     }
@@ -134,8 +139,10 @@ namespace OmniFlattener
     public class FlattenContext(IFlattenLogger logger, IFlattenSettings settings, IFlattenService flattenService)
         : IFlattenContext
     {
-        public IFlattenLogger   Logger         { get; } = logger         ?? throw new ArgumentNullException(nameof(logger));
-        public IFlattenSettings Settings       { get; } = settings       ?? throw new ArgumentNullException(nameof(settings));
-        public IFlattenService  FlattenService { get; } = flattenService ?? throw new ArgumentNullException(nameof(flattenService));
+        public IFlattenLogger Logger { get; } = logger ?? throw new ArgumentNullException(nameof(logger));
+        public IFlattenSettings Settings { get; } = settings ?? throw new ArgumentNullException(nameof(settings));
+
+        public IFlattenService FlattenService { get; } =
+            flattenService ?? throw new ArgumentNullException(nameof(flattenService));
     }
 }

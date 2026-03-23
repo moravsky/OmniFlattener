@@ -39,7 +39,7 @@ namespace OmniFlattener
             _ctx = ctx ?? throw new ArgumentNullException(nameof(ctx));
 
             _nextEodFlattenAt = ComputeNextEodFlattenAt(ctx.Settings.Now, ctx.Settings.EodFlattenAt);
-            _ctx.Logger.Log($"EOD protection: {(_ctx.Settings.EodEnabled ? $"enabled, flatten at {_nextEodFlattenAt}" : "disabled")}");
+            _ctx.Logger.LogInfo($"EOD protection: {(_ctx.Settings.EodEnabled ? $"enabled, flatten at {_nextEodFlattenAt}" : "disabled")}");
 
             if (ctx.Settings.RefreshIntervalMs > 0)
             {
@@ -63,6 +63,10 @@ namespace OmniFlattener
             {
                 CheckCore(source);
             }
+            catch (Exception ex)
+            {
+                _ctx.Logger.LogError($"[{source}] Engine CheckCore() failed: {ex.Message}");
+            }
             finally
             {
                 Monitor.Exit(_lock);
@@ -84,7 +88,7 @@ namespace OmniFlattener
             var now = _ctx.Settings.Now;
             if (now < _nextEodFlattenAt) return;
 
-            _ctx.Logger.Log(
+            _ctx.Logger.LogInfo(
                 $"[{source}] EOD flatten at {_ctx.Settings.EodFlattenAt:hh\\:mm} reached — flattening all accounts.");
             FlattenAll(_ctx.Settings.AllAccounts);
 
@@ -93,45 +97,43 @@ namespace OmniFlattener
 
         private void CheckLeaderIsFlat(string source)
         {
-            if (IsLeaderFlat())
+            // Leader is NOT flat. Reset everything and return.
+            if (!IsLeaderFlat())
             {
                 if (_syncDelayCts != null)
                 {
-                    // We are actively waiting for the sync delay to elapse. Do nothing.
-                    return;
-                }
-
-                if (!_alreadyFlattenedThisCycle)
-                {
-                    // 1. Just became flat. Start the clock.
-                    _ctx.Logger.Log(
-                        $"[{source}] Leader is flat — sync delay started ({_ctx.Settings.SyncDelayMs}ms)...");
-                    StartSyncDelay();
-                }
-                else
-                {
-                    // 2. Delay elapsed previously, and leader is STILL flat. 
-                    // Sweep any new stragglers (FlattenAll avoids log spam internally).
-                    var leaderName = _ctx.Settings.Leader?.AccountName;
-                    var followers = _ctx.Settings.AllAccounts
-                        .Where(a => a.AccountName != leaderName)
-                        .ToList();
-                    FlattenAll(followers);
-                }
-            }
-            else
-            {
-                // Leader is NOT flat.
-                if (_syncDelayCts != null)
-                {
-                    // They resumed while we were waiting. Cancel the delay.
-                    _ctx.Logger.Log($"[{source}] Leader resumed activity — sync delay cancelled.");
+                    _ctx.Logger.LogInfo($"[{source}] Leader resumed activity — sync delay cancelled.");
                     StopSyncDelay();
                 }
 
-                // Reset the cycle so it can trigger again next time they go flat.
                 _alreadyFlattenedThisCycle = false;
+                return;
             }
+
+            // --- LEADER IS FLAT BEYOND THIS POINT ---
+
+            // We are actively waiting out the clock. Do nothing.
+            if (_syncDelayCts != null)
+                return;
+
+            // Otherwise we just noticed the flat state. Start the clock.
+            if (!_alreadyFlattenedThisCycle)
+            {
+                _ctx.Logger.LogInfo($"[{source}] Leader is flat — sync delay started ({_ctx.Settings.SyncDelayMs}ms)...");
+                StartSyncDelay();
+                return;
+            }
+
+            // Sync delay elapsed and leader is STILL flat. Sweep stragglers.
+            FlattenAll(GetFollowers());
+        }
+
+        private IReadOnlyList<IAccountView> GetFollowers()
+        {
+            var leaderName = _ctx.Settings.Leader?.AccountName;
+            return _ctx.Settings.AllAccounts
+                .Where(a => a.AccountName != leaderName)
+                .ToList();
         }
 
         private void StartSyncDelay()
@@ -160,7 +162,7 @@ namespace OmniFlattener
                 }
                 catch (Exception ex)
                 {
-                    _ctx.Logger.Log($"[sync] Delay error: {ex.Message}");
+                    _ctx.Logger.LogError($"[sync] Delay error: {ex.Message}");
                 }
             });
         }
@@ -183,24 +185,24 @@ namespace OmniFlattener
 
                 if (!IsLeaderFlat())
                 {
-                    _ctx.Logger.Log("[sync] Leader resumed before delay elapsed — flatten aborted.");
+                    _ctx.Logger.LogInfo("[sync] Leader resumed before delay elapsed — flatten aborted.");
                     _syncDelayCts = null;
                     return;
                 }
 
-                _ctx.Logger.Log("[sync] Leader still flat — flattening followers.");
-                var leaderName = _ctx.Settings.Leader?.AccountName;
-                var followers = _ctx.Settings.AllAccounts
-                    .Where(a => a.AccountName != leaderName)
-                    .ToList();
-
-                FlattenAll(followers);
-
-                // Clear the CTS so the engine knows the wait is over
-                _syncDelayCts = null;
+                _ctx.Logger.LogInfo("[sync] Leader still flat — flattening followers.");
+                
+                FlattenAll(GetFollowers());
+            }
+            catch (Exception ex)
+            {
+                _ctx.Logger.LogError($"[sync] FlattenAll sweep failed: {ex.Message}");
             }
             finally
             {
+                // Clear the CTS so the engine knows the wait is over
+                _syncDelayCts = null;
+
                 if (acquireLock)
                     Monitor.Exit(_lock);
             }
@@ -214,7 +216,7 @@ namespace OmniFlattener
             if (orders.Count == 0 && positions.Count == 0)
             {
                 if (!_alreadyFlattenedThisCycle)
-                    _ctx.Logger.Log("[flatten] Nothing to flatten.");
+                    _ctx.Logger.LogInfo("[flatten] Nothing to flatten.");
                 _alreadyFlattenedThisCycle = true;
                 return;
             }
@@ -223,14 +225,14 @@ namespace OmniFlattener
 
             foreach (var order in orders)
             {
-                _ctx.Logger.Log($"[flatten] Cancelling order {order.Id} on '{order.AccountName}' " +
+                _ctx.Logger.LogInfo($"[flatten] Cancelling order {order.Id} on '{order.AccountName}' " +
                                 $"({order.Side} x{order.Quantity} {order.Symbol} @ {order.Price})");
                 _ctx.FlattenService.CancelOrder(order);
             }
 
             foreach (var position in positions)
             {
-                _ctx.Logger.Log($"[flatten] Closing position on '{position.AccountName}' " +
+                _ctx.Logger.LogInfo($"[flatten] Closing position on '{position.AccountName}' " +
                                 $"({position.Side} x{Math.Abs(position.Quantity)} {position.Symbol}) at market");
                 _ctx.FlattenService.ClosePositionAtMarket(position);
             }

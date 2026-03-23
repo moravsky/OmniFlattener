@@ -5,14 +5,15 @@ namespace OmniFlattener
 {
     public interface IFlattenContext
     {
-        IFlattenLogger   Logger         { get; }
-        IFlattenSettings Settings       { get; }
-        IFlattenService  FlattenService { get; }
+        IFlattenLogger Logger { get; }
+        IFlattenSettings Settings { get; }
+        IFlattenService FlattenService { get; }
     }
 
     public interface IFlattenLogger
     {
-        void Log(string message);
+        void LogInfo(string message);
+        void LogError(string message);
     }
 
     public interface IFlattenSettings
@@ -38,7 +39,7 @@ namespace OmniFlattener
 
         // ── EOD ───────────────────────────────────────────────────────────────
 
-        bool     EodEnabled   { get; }
+        bool EodEnabled { get; }
         TimeSpan EodFlattenAt { get; }
 
         /// <summary>
@@ -62,21 +63,21 @@ namespace OmniFlattener
 
     public class OrderSnapshot
     {
-        public required string  Id          { get; set; }
-        public required string  AccountName { get; set; }
-        public required string  Symbol      { get; set; }
-        public required string  Side        { get; set; }
-        public          double  Quantity    { get; set; }
-        public          double  Price       { get; set; }
-        public          object? RawOrder    { get; set; }
+        public required string Id { get; set; }
+        public required string AccountName { get; set; }
+        public required string Symbol { get; set; }
+        public required string Side { get; set; }
+        public double Quantity { get; set; }
+        public double Price { get; set; }
+        public object? RawOrder { get; set; }
     }
 
     public class PositionSnapshot
     {
-        public required string  AccountName { get; set; }
-        public required string  Symbol      { get; set; }
-        public          double  Quantity    { get; set; }
-        public required string  Side        { get; set; }
-        public          object? RawPosition { get; set; }
+        public required string AccountName { get; set; }
+        public required string Symbol { get; set; }
+        public double Quantity { get; set; }
+        public required string Side { get; set; }
+        public object? RawPosition { get; set; }
     }
 }
