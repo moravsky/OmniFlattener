@@ -28,6 +28,15 @@ Replay connection, three accounts: `Leader`, `Follower1`, `Follower2`. Sync dela
 | <input type="checkbox"> | **Settings timezone** | Open settings, select "CME Indexes Full day" template. | Flatten At shows correct local time for market close (ex. 1:58 PM MST, not EST or UTC). |
 ---
 
+## Broker Lag & Idempotency
+
+**Note:** These tests are best performed on the live broker connection. To minimize financial risk, use Limit Orders placed extremely far away from the current market price (e.g., 1000 points out of the money).
+
+| Done | Scenario | Steps | Expected |
+|------|----------|-------|----------|
+| <input type="checkbox"> | **Order Cancel Idempotency** | 1. Open a 1-lot position on the Leader.<br>2. Place a Buy Limit order 1000 points below the market on Follower1.<br>3. Close the Leader's position to trigger the flatten.<br>4. Review the strategy logs. | The log must show EXACTLY ONE `[flatten] Cancelling order...` message for Follower1's order. The infinite feedback loop from Rithmic's order mutation should not occur. |
+| <input type="checkbox"> | **Position Close Idempotency (Sim/Eval Only)** | 1. Use a **Simulated or Evaluation** account for Follower1.<br>2. Open a 1-lot position on the Leader.<br>3. Open a 1-lot **MES** position on Follower1 (safest/slowest micro contract).<br>4. Close the Leader's position to trigger the flatten.<br>5. Review the strategy logs. | The log must show EXACTLY ONE `[flatten] Closing position...` message for Follower1. If the broker lags in closing the position, the engine must not spam duplicate market orders. |
+
 ## Smoke Check Before Prod Deploy
 
 <input type="checkbox"> Leader correct, EOD time correct  

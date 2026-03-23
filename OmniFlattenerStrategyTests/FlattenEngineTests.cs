@@ -190,6 +190,46 @@ namespace OmniFlattener.Tests
 
         #endregion
 
+        #region Broker Lag
+
+        [Fact]
+        public void Broker_lag_simulation_duplicate_order_events_are_ignored()
+        {
+            var (engine, _, spy, _, follower) = Make();
+            var order = MakeOrder("GHOST-ORDER-123");
+            follower.Orders.Add(order);
+
+            // 1. First event triggers the flatten
+            engine.Check("event-1");
+
+            // Spy instantly removed it. Let's pretend broker just mutated it,
+            // leaving it open, which fires a second event into the engine.
+            follower.Orders.Add(order);
+            engine.Check("event-2");
+
+            // 2. TrackingSet should remember the ID and prevent a second cancel
+            Assert.Single(spy.CancelledOrders);
+        }
+
+        [Fact]
+        public void Broker_lag_simulation_duplicate_position_events_are_ignored()
+        {
+            var (engine, _, spy, _, follower) = Make();
+            var position = MakePosition("follower", 2);
+            follower.Positions.Add(position);
+
+            engine.Check("event-1");
+
+            // Pretend broker lagged and position is still there
+            follower.Positions.Add(position);
+            engine.Check("event-2");
+
+            // TrackingSet should remember the AccountName_Symbol key
+            Assert.Single(spy.ClosedPositions);
+        }
+
+        #endregion
+
         #region Flat window
 
         [Fact]
