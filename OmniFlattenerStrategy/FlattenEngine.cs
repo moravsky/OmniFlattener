@@ -39,6 +39,7 @@ namespace OmniFlattener
             _ctx = ctx ?? throw new ArgumentNullException(nameof(ctx));
 
             _nextEodFlattenAt = ComputeNextEodFlattenAt(ctx.Settings.Now, ctx.Settings.EodFlattenAt);
+            _ctx.Logger.Log($"EOD protection: {(_ctx.Settings.EodEnabled ? $"enabled, flatten at {_nextEodFlattenAt}" : "disabled")}");
 
             if (ctx.Settings.RefreshIntervalMs > 0)
             {
@@ -153,8 +154,9 @@ namespace OmniFlattener
                     Thread.Sleep(_ctx.Settings.SyncDelayMs);
                     OnSyncDelayElapsed(cts.Token, acquireLock: true);
                 }
-                catch (OperationCanceledException)
+                catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException)
                 {
+                    // Ignore: The delay was cancelled while we were sleeping
                 }
                 catch (Exception ex)
                 {
