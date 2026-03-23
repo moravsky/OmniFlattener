@@ -35,7 +35,8 @@ namespace OmniFlattener.Tests
 
         private class StubLogger(Action<string>? log = null) : IFlattenLogger
         {
-            public void Log(string message) => log?.Invoke(message);
+            public void LogInfo(string message) => log?.Invoke(message);
+            public void LogError(string message) => log?.Invoke("[ERROR] " + message);
         }
 
         private class StubSettings : IFlattenSettings
